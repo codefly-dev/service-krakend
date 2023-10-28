@@ -2,7 +2,6 @@ go 1.21.3
 
 use (
 	.
-	base
-    /Users/antoine/Development/codefly.dev/core
-    /Users/antoine/Development/codefly.dev/cli
+	../../../../codefly.dev/core
+	../../../../codefly.dev/cli
 )

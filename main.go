@@ -8,7 +8,7 @@ import (
 
 var conf = configurations.Plugin{
 	Publisher:  "codefly.ai",
-	Identifier: "go-grpc",
+	Identifier: "krakend",
 	Kind:       configurations.PluginService,
 	Version:    "0.0.0",
 }
@@ -17,8 +17,6 @@ type Service struct {
 	PluginLogger *plugins.PluginLogger
 	Location     string
 	Spec         *Spec
-	GrpcEndpoint configurations.Endpoint
-	RestEndpoint *configurations.Endpoint
 }
 
 func NewService() *Service {
@@ -28,26 +26,24 @@ func NewService() *Service {
 	}
 }
 
+type EndpointForwarding struct {
+	Endpoint string `yaml:"endpoint"`
+}
+
+type ServiceForwarding struct {
+	Endpoints []EndpointForwarding `yaml:"endpoints"`
+}
+
+type ApplicationForwarding struct {
+	Services []ServiceForwarding `yaml:"services"`
+}
+
 type Spec struct {
-	Debug              bool `yaml:"debug"` // Developer only
-	Watch              bool `yaml:"watch"`
-	WithDebugSymbols   bool `yaml:"with-debug-symbols"`
-	CreateHttpEndpoint bool `yaml:"create-rest-endpoint"`
+	Debug bool `yaml:"debug"` // Developer only
+
 }
 
 func (p *Service) InitEndpoints() {
-	p.GrpcEndpoint = configurations.Endpoint{
-		Name:        configurations.Grpc,
-		Description: "Expose gRPC",
-	}
-
-	p.PluginLogger.Debugf("initEndpoints: %v", p.Spec.CreateHttpEndpoint)
-	if p.Spec.CreateHttpEndpoint {
-		p.RestEndpoint = &configurations.Endpoint{
-			Name:        configurations.Http,
-			Description: "Expose REST",
-		}
-	}
 }
 
 func main() {

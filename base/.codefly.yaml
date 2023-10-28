@@ -1,5 +1,0 @@
-endpoints:
- - name: base.default::grpc
-   override: localhost:9090
- - name: base.default::http
-   override: localhost:9091
