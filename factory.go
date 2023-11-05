@@ -2,20 +2,21 @@ package main
 
 import (
 	"embed"
+
 	"github.com/codefly-dev/cli/pkg/plugins/services"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
+
 	corev1 "github.com/codefly-dev/cli/proto/v1/core"
+	servicev1 "github.com/codefly-dev/cli/proto/v1/services"
 	factoryv1 "github.com/codefly-dev/cli/proto/v1/services/factory"
 	"github.com/codefly-dev/core/configurations"
 	"github.com/codefly-dev/core/shared"
-	"github.com/codefly-dev/core/templates"
-	"path"
-	"strings"
 )
 
 type Factory struct {
 	*Service
-	Identity *factoryv1.ServiceIdentity
-	Location string
 }
 
 func NewFactory() *Factory {
@@ -54,50 +55,27 @@ type CreateConfiguration struct {
 	Readme      Readme
 }
 
-func (p *Factory) Init(req *factoryv1.InitRequest) (*factoryv1.InitResponse, error) {
+func (p *Factory) Init(req *servicev1.InitRequest) (*factoryv1.InitResponse, error) {
 	defer p.PluginLogger.Catch()
 
 	p.PluginLogger.Debugf("[factory::init] %v", req)
-	p.Identity = req.Identity
-	p.Location = req.Location
 
-	return &factoryv1.InitResponse{RuntimeOptions: []*corev1.Option{
-		services.NewRuntimeOption[bool]("watch", "🕵️Automatically restart on code changes", true),
-	}}, nil
-
-}
-
-func (p *Factory) Local(f string) string {
-	return path.Join(p.Location, f)
+	return &factoryv1.InitResponse{}, nil
 }
 
 func (p *Factory) Create(req *factoryv1.CreateRequest) (*factoryv1.CreateResponse, error) {
 	defer p.PluginLogger.Catch()
 	create := CreateConfiguration{
-		Name:      strings.Title(p.Identity.Name),
-		Domain:    p.Identity.Domain,
-		Namespace: p.Identity.Namespace,
-		Readme:    Readme{Summary: p.Identity.Name},
+		Name:      cases.Title(language.English, cases.NoLower).String(p.Identity.Name),
+		Domain:    p.Base.Identity.Domain,
+		Namespace: p.Base.Identity.Namespace,
+		Readme:    Readme{Summary: p.Base.Identity.Name},
 	}
 
-	// Templatize as usual
-	err := templates.CopyAndApply(p.PluginLogger, templates.NewEmbeddedFileSystem(factory), shared.NewDir("templates/factory"),
-		shared.NewDir(p.Location), create)
-	if err != nil {
-		return nil, p.PluginLogger.Wrapf(err, "cannot copy and apply template")
-	}
-
-	err = templates.CopyAndApply(p.PluginLogger, templates.NewEmbeddedFileSystem(builder), shared.NewDir("templates/builder"),
-		shared.NewDir(p.Local("builder")), nil)
-	if err != nil {
-		return nil, p.PluginLogger.Wrapf(err, "cannot copy and apply template")
-	}
-
-	out, err := shared.GenerateTree(p.Location, " ")
+	err := p.Templates(create, services.WithFactory(factory), services.WithBuilder(builder), services.WithRoutes(routes))
 	if err != nil {
 		return nil, err
 	}
-	p.PluginLogger.Info("tree: %s", out)
 
 	// Load default
 	err = configurations.LoadSpec(req.Spec, &p.Spec, shared.BaseLogger(p.PluginLogger))
@@ -122,8 +100,16 @@ func (p *Factory) Update(req *factoryv1.UpdateRequest) (*factoryv1.UpdateRespons
 	return &factoryv1.UpdateResponse{}, nil
 }
 
+func (p *Factory) Communicate(req *corev1.Engage) (*corev1.InformationRequest, error) {
+	// TODO implement me
+	panic("implement me")
+}
+
 //go:embed templates/factory
 var factory embed.FS
 
 //go:embed templates/builder
 var builder embed.FS
+
+//go:embed templates/routes
+var routes embed.FS

@@ -14,15 +14,16 @@ var conf = configurations.Plugin{
 }
 
 type Service struct {
-	PluginLogger *plugins.PluginLogger
-	Location     string
-	Spec         *Spec
+	*services.Base
+
+	// Spec
+	Spec *Spec
 }
 
 func NewService() *Service {
 	return &Service{
-		PluginLogger: plugins.NewPluginLogger(conf.Name()),
-		Spec:         &Spec{},
+		Base: services.NewServiceBase(conf.Of(configurations.PluginService)),
+		Spec: &Spec{},
 	}
 }
 
