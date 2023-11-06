@@ -18,15 +18,17 @@ import (
 type Runtime struct {
 	*Service
 
+	// State
+	Routes         []*configurations.RestRoute
+	RoutesLocation string
+
 	// internal
 	Runner *runners.Runner
 
 	// TODO: Get is to work first, then refactor
-	RoutesLocation      string
-	Routes              []*configurations.ApplicationRestRoute
-	SyncRoutesQuestions []*corev1.Question
-	sync                *communicate.ClientContext
-	SyncRoutes          []*configurations.RestRoute
+	sync                communicate.Client
+	syncRoutes          []*configurations.RestRoute
+	syncRoutesQuestions []*corev1.Question
 }
 
 func NewRuntime() *Runtime {
@@ -133,23 +135,24 @@ func (p *Runtime) Stop(req *runtimev1.StopRequest) (*runtimev1.StopResponse, err
 	return &runtimev1.StopResponse{}, nil
 }
 
-func (p *Runtime) NewSyncCommunicate(routes []*configurations.ApplicationRestRoute) error {
+func (p *Runtime) NewSyncCommunicate(routes []*configurations.RestRoute) error {
+	if len(routes) == 0 {
+		p.PluginLogger.Info("no new routes detected")
+		p.sync = communicate.NewNoOpClientContext()
+		return nil
+	}
 	client := communicate.NewClientContext(communicate.Sync, p.PluginLogger)
 	// Set the state of sync communicate
-	for _, app := range routes {
-		for _, svc := range app.ServiceRestRoutes {
-			for _, route := range svc.Routes {
-				p.SyncRoutes = append(p.SyncRoutes, route)
-				p.SyncRoutesQuestions = append(p.SyncRoutesQuestions,
-					client.NewConfirm(&corev1.Message{
-						Name:    route.Path,
-						Message: fmt.Sprintf("Want to expose %s: %v?", route.Path, route.Methods),
-					}, true))
-			}
-		}
+	for _, route := range routes {
+		p.syncRoutes = append(p.syncRoutes, route)
+		p.syncRoutesQuestions = append(p.syncRoutesQuestions,
+			client.NewConfirm(&corev1.Message{
+				Name:    route.Path,
+				Message: fmt.Sprintf("Want to expose %s: %v?", route.Path, route.Methods),
+			}, true))
 	}
 	err := client.NewSequence(
-		p.SyncRoutesQuestions...,
+		p.syncRoutesQuestions...,
 	)
 	if err != nil {
 		return p.PluginLogger.Wrapf(err, "can't create sequence")
@@ -162,55 +165,66 @@ func (p *Runtime) NewSyncCommunicate(routes []*configurations.ApplicationRestRou
 	return nil
 }
 
+// LoadRoutes from routes configuration folder
 func (p *Runtime) LoadRoutes() error {
-	// Load all the routes
-	p.PluginLogger.DebugMe("loading routes")
 	var err error
-	p.Routes, err = services.LoadApplicationRoutes(path.Join(p.ConfigurationLocation, "routes"), p.PluginLogger)
+	p.Routes, err = services.LoadApplicationRoutes(p.RoutesLocation, p.PluginLogger)
 	if err != nil {
 		return p.PluginLogger.Wrapf(err, "cannot load routes")
 	}
-	p.PluginLogger.DebugMe("routes: %v", p.Routes)
 	return nil
 }
 
 func (p *Runtime) Sync(req *runtimev1.SyncRequest) (*runtimev1.SyncResponse, error) {
 	defer p.PluginLogger.Catch()
 
+	// This is the first call
 	if p.sync == nil {
+		// From request
 		p.PluginLogger.DebugMe("first call to sync")
+		routes := services.ConvertApplicationRoutes(req.Routes)
+		p.PluginLogger.DebugMe("received from request routes: %v", routes)
+
+		// From configuration
 		err := p.LoadRoutes()
 		if err != nil {
 			return nil, p.PluginLogger.Wrapf(err, "cannot load routes")
 		}
-		// Detect if we have unknown routes
-		p.PluginLogger.DebugMe("got routes: %v %v", p.Location, req.Routes)
+		p.PluginLogger.DebugMe("loaded from configuration routes: %v", p.Routes)
 
-		routes := services.ConvertApplicationRoutes(req.Routes)
-		p.PluginLogger.TODO("right now, assume all routes are new")
+		// Detect if we have unknown routes
+		routes = services.DetectNewRoutes(p.Routes, routes)
+		p.PluginLogger.DebugMe("new routes detected: %v", routes)
 
 		err = p.NewSyncCommunicate(routes)
 		if err != nil {
 			return nil, p.PluginLogger.Wrapf(err, "cannot create sync communicate")
 		}
-		if len(p.SyncRoutesQuestions) > 0 {
+		if p.sync == nil {
+			return nil, p.PluginLogger.Errorf("sync: after new sync communicate == nil")
+		}
+		if len(p.syncRoutesQuestions) > 0 {
 			p.PluginLogger.DebugMe("we need some communication!")
 			return &runtimev1.SyncResponse{NeedCommunication: true}, nil
+		} else {
+			return &runtimev1.SyncResponse{NeedCommunication: false}, nil
 		}
 	}
 	if p.sync == nil {
 		return nil, p.PluginLogger.Errorf("sync: after sync == nil")
 	}
 
-	for i := range p.SyncRoutesQuestions {
-		expose := p.sync.Confirm(i).Confirmed
-		if expose {
-			route := p.SyncRoutes[i]
-			p.PluginLogger.DebugMe("exposing %s", route.Path)
-			//err := route.Save(p.RoutesLocation, p.PluginLogger)
-			//if err != nil {
-			//	return nil, p.PluginLogger.Wrapf(err, "cannot save route")
-			//}
+	if state := p.sync.(*communicate.ClientContext); state != nil {
+		for i := range p.syncRoutesQuestions {
+			expose := state.Confirm(i).Confirmed
+			if expose {
+				route := p.syncRoutes[i]
+				p.PluginLogger.DebugMe("exposing %s", route.Path)
+				err := route.Save(p.RoutesLocation, p.PluginLogger)
+				if err != nil {
+					return nil, p.PluginLogger.Wrapf(err, "cannot save route")
+				}
+			}
 		}
 	}
 
