@@ -58,9 +58,15 @@ type CreateConfiguration struct {
 func (p *Factory) Init(req *servicev1.InitRequest) (*factoryv1.InitResponse, error) {
 	defer p.PluginLogger.Catch()
 
+	err := p.Base.Init(req, p.Spec)
+	if err != nil {
+		return nil, err
+	}
 	p.PluginLogger.Debugf("[factory::init] %v", req)
 
-	return &factoryv1.InitResponse{}, nil
+	return &factoryv1.InitResponse{
+		Version: p.Version(),
+	}, nil
 }
 
 func (p *Factory) Create(req *factoryv1.CreateRequest) (*factoryv1.CreateResponse, error) {
@@ -82,8 +88,6 @@ func (p *Factory) Create(req *factoryv1.CreateRequest) (*factoryv1.CreateRespons
 	if err != nil {
 		return nil, err
 	}
-
-	p.InitEndpoints()
 
 	//	May override or check spec here
 	spec, err := configurations.SerializeSpec(p.Spec)

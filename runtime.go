@@ -5,14 +5,13 @@ import (
 	"fmt"
 	"path"
 
-	"github.com/codefly-dev/core/configurations"
-
 	"github.com/codefly-dev/cli/pkg/plugins/communicate"
 	"github.com/codefly-dev/cli/pkg/plugins/services"
 	"github.com/codefly-dev/cli/pkg/runners"
 	corev1 "github.com/codefly-dev/cli/proto/v1/core"
 	servicev1 "github.com/codefly-dev/cli/proto/v1/services"
 	runtimev1 "github.com/codefly-dev/cli/proto/v1/services/runtime"
+	"github.com/codefly-dev/core/configurations"
 )
 
 type Runtime struct {
@@ -46,7 +45,11 @@ func (p *Runtime) Init(req *servicev1.InitRequest) (*runtimev1.InitResponse, err
 		return nil, err
 	}
 
-	p.RoutesLocation = path.Join(p.Location, "codefly/routes")
+	// From configuration
+	err = p.LoadRoutes()
+	if err != nil {
+		return nil, p.PluginLogger.Wrapf(err, "cannot load routes")
+	}
 
 	channels, err := p.WithCommunications(services.NewDynamicChannel(communicate.Sync))
 	if err != nil {
@@ -62,7 +65,16 @@ func (p *Runtime) Init(req *servicev1.InitRequest) (*runtimev1.InitResponse, err
 func (p *Runtime) Configure(req *runtimev1.ConfigureRequest) (*runtimev1.ConfigureResponse, error) {
 	defer p.PluginLogger.Catch()
 
-	// p.InitEndpoints()
+	p.PluginLogger.Info("%s -> configure", p.Identity.Name)
+
+	return &runtimev1.ConfigureResponse{Status: services.ConfigureSuccess()}, nil
+}
+
+func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, error) {
+	defer p.PluginLogger.Catch()
+
+	p.PluginLogger.DebugMe("%s: network mapping: %v", p.Identity.Name, req.NetworkMappings)
+	p.PluginLogger.DebugMe("%s: routes", p.Routes)
 
 	envs := []string{
 		"FC_ENABLE=1",
@@ -86,35 +98,20 @@ func (p *Runtime) Configure(req *runtimev1.ConfigureRequest) (*runtimev1.Configu
 
 	err := p.Runner.Init(context.Background())
 	if err != nil {
-		return &runtimev1.ConfigureResponse{
-			Status: services.ConfigureError(err),
+		return &runtimev1.StartResponse{
+			Status: services.StartError(err),
 		}, nil
 	}
-
-	p.PluginLogger.Info("%s -> configure", p.Identity.Name)
-
-	return &runtimev1.ConfigureResponse{Status: services.ConfigureSuccess()}, nil
-}
-
-func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, error) {
-	defer p.PluginLogger.Catch()
-
-	p.PluginLogger.Info("%s: network mapping: %v", p.Identity.Name, req.NetworkMappings)
 
 	tracker, err := p.Runner.Run(context.Background())
 	if err != nil {
 		return &runtimev1.StartResponse{
-			Status: &runtimev1.StartStatus{
-				Status:  runtimev1.StartStatus_ERROR,
-				Message: err.Error(),
-			},
+			Status: services.StartError(err),
 		}, nil
 	}
 
 	return &runtimev1.StartResponse{
-		Status: &runtimev1.StartStatus{
-			Status: runtimev1.StartStatus_STARTED,
-		},
+		Status:   services.StartSuccess(),
 		Trackers: []*runtimev1.Tracker{tracker.Proto()},
 	}, nil
 }
@@ -167,6 +164,7 @@ func (p *Runtime) NewSyncCommunicate(routes []*configurations.RestRoute) error {
 
 // LoadRoutes from routes configuration folder
 func (p *Runtime) LoadRoutes() error {
+	p.RoutesLocation = path.Join(p.Location, "codefly/routes")
 	var err error
 	p.Routes, err = services.LoadApplicationRoutes(p.RoutesLocation, p.PluginLogger)
 	if err != nil {
@@ -185,18 +183,13 @@ func (p *Runtime) Sync(req *runtimev1.SyncRequest) (*runtimev1.SyncResponse, err
 		routes := services.ConvertApplicationRoutes(req.Routes)
 		p.PluginLogger.DebugMe("received from request routes: %v", routes)
 
-		// From configuration
-		err := p.LoadRoutes()
-		if err != nil {
-			return nil, p.PluginLogger.Wrapf(err, "cannot load routes")
-		}
 		p.PluginLogger.DebugMe("loaded from configuration routes: %v", p.Routes)
 
 		// Detect if we have unknown routes
 		routes = services.DetectNewRoutes(p.Routes, routes)
 		p.PluginLogger.DebugMe("new routes detected: %v", routes)
 
-		err = p.NewSyncCommunicate(routes)
+		err := p.NewSyncCommunicate(routes)
 		if err != nil {
 			return nil, p.PluginLogger.Wrapf(err, "cannot create sync communicate")
 		}
