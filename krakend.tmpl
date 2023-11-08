@@ -1,5 +1,6 @@
 version: 3
 timeout: "3s"
+port: {{ .routes.port }}
 endpoints:
 {{ range $endpoint := .routes.group }}
     - endpoint: {{ $endpoint.target }}

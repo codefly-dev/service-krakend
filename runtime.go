@@ -9,6 +9,7 @@ import (
 	"path"
 
 	"github.com/codefly-dev/cli/pkg/plugins/communicate"
+	"github.com/codefly-dev/cli/pkg/plugins/network"
 	"github.com/codefly-dev/cli/pkg/plugins/services"
 	"github.com/codefly-dev/cli/pkg/runners"
 	corev1 "github.com/codefly-dev/cli/proto/v1/core"
@@ -20,6 +21,9 @@ import (
 
 type Runtime struct {
 	*Service
+
+	Endpoint *corev1.Endpoint
+	Port                int
 
 	// State
 	Routes         []*configurations.RestRoute
@@ -48,6 +52,10 @@ func (p *Runtime) Init(req *servicev1.InitRequest) (*runtimev1.InitResponse, err
 	if err != nil {
 		return nil, err
 	}
+	p.Endpoint, err = services.NewHttpApi(&configurations.Endpoint{Name: p.Identity.Name, Public: true})
+	if err != nil {
+		return nil, p.Wrapf(err, "cannot  create tcp endpoint")
+	}
 
 	// From configuration
 	err = p.LoadRoutes()
@@ -69,19 +77,23 @@ func (p *Runtime) Init(req *servicev1.InitRequest) (*runtimev1.InitResponse, err
 func (p *Runtime) Configure(req *runtimev1.ConfigureRequest) (*runtimev1.ConfigureResponse, error) {
 	defer p.PluginLogger.Catch()
 
-	p.PluginLogger.Info("%s -> configure", p.Identity.Name)
-
-	return &runtimev1.ConfigureResponse{Status: services.ConfigureSuccess()}, nil
+	nets, err := p.Network()
+	if err != nil {
+		return nil, p.Wrapf(err, "cannot create default endpoint")
+	}
+	return &runtimev1.ConfigureResponse{Status: services.ConfigureSuccess(),
+		NetworkMappings: nets}, nil
 }
 
 // Settings will contain all the static information
 // JSON -- yaml not working
 type Settings struct {
+	Port int         `json:"port"`
 	Group []Forwarding `json:"group"`
 }
 
 type Backend struct {
-	URL  string `json:"url"`
+	URL   string   `json:"url"`
 	Hosts []string `json:"hosts"`
 }
 
@@ -95,13 +107,14 @@ func gatewayTarget(r *configurations.RestRoute) string {
 }
 
 func (p *Runtime) writeConfig(nms []*runtimev1.NetworkMapping) error {
+
 	// Write the main config
 	err := shared.Embed(config).Copy("krakend.tmpl", p.Local("config/krakend.tmpl"))
 	if err != nil {
 		return p.PluginLogger.Wrapf(err, "cannot copy config")
 	}
 
-	settings := Settings{}
+	settings := Settings{Port: p.Port}
 	for _, route := range p.Routes {
 		nm, err := services.NetworkMappingForRoute(p.Context(), route, nms)
 		if err != nil {
@@ -110,7 +123,7 @@ func (p *Runtime) writeConfig(nms []*runtimev1.NetworkMapping) error {
 		settings.Group = append(settings.Group, Forwarding{
 			Target: gatewayTarget(route),
 			Backend: Backend{
-				URL: route.Path,
+				URL:   route.Path,
 				Hosts: nm.Addresses,
 			},
 		})
@@ -129,7 +142,6 @@ func (p *Runtime) writeConfig(nms []*runtimev1.NetworkMapping) error {
 
 func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, error) {
 	defer p.PluginLogger.Catch()
-
 
 	p.PluginLogger.DebugMe("%s: network mapping: %v", p.Identity.Name, req.NetworkMappings)
 	p.PluginLogger.DebugMe("%s: routes", p.Routes)
@@ -164,7 +176,8 @@ func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, 
 			Status: services.StartError(err),
 		}, nil
 	}
-
+	// useful for debugging -- while I fix the error handling with Start
+	//p.Runner.Wait = true
 	tracker, err := p.Runner.Run(context.Background())
 	if err != nil {
 		p.PluginLogger.DebugMe("OOPS %v", err)
@@ -313,6 +326,23 @@ func (p *Runtime) Communicate(req *corev1.Engage) (*corev1.InformationRequest, e
 /* Details
 
  */
+
+func (p *Runtime) Network() ([]*runtimev1.NetworkMapping, error) {
+	pm := network.NewServicePortManager(p.Identity, p.Endpoint)
+	err := pm.Expose(p.Endpoint)
+	if err != nil {
+		return nil, p.Wrapf(err, "cannot add grpc endpoint to network manager")
+	}
+	err = pm.Reserve()
+	if err != nil {
+		return nil, p.Wrapf(err, "cannot reserve ports")
+	}
+	p.Port, err = pm.Port(p.Endpoint)
+	if err != nil {
+		return nil, p.Wrapf(err, "cannot get port")
+	}
+	return pm.NetworkMapping()
+}
 
 //go:embed krakend.tmpl
 var config embed.FS

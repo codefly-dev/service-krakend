@@ -12,7 +12,6 @@ import (
 	servicev1 "github.com/codefly-dev/cli/proto/v1/services"
 	factoryv1 "github.com/codefly-dev/cli/proto/v1/services/factory"
 	"github.com/codefly-dev/core/configurations"
-	"github.com/codefly-dev/core/shared"
 )
 
 type Factory struct {
@@ -71,6 +70,11 @@ func (p *Factory) Init(req *servicev1.InitRequest) (*factoryv1.InitResponse, err
 
 func (p *Factory) Create(req *factoryv1.CreateRequest) (*factoryv1.CreateResponse, error) {
 	defer p.PluginLogger.Catch()
+	err := p.Base.PreCreate(req, p.Spec)
+	if err != nil {
+		return nil, err
+	}
+
 	create := CreateConfiguration{
 		Name:      cases.Title(language.English, cases.NoLower).String(p.Identity.Name),
 		Domain:    p.Base.Identity.Domain,
@@ -78,26 +82,17 @@ func (p *Factory) Create(req *factoryv1.CreateRequest) (*factoryv1.CreateRespons
 		Readme:    Readme{Summary: p.Base.Identity.Name},
 	}
 
-	err := p.Templates(create, services.WithFactory(factory), services.WithBuilder(builder), services.WithRoutes(routes))
+	err = p.Templates(create, services.WithFactory(factory), services.WithBuilder(builder), services.WithRoutes(routes))
 	if err != nil {
 		return nil, err
 	}
 
-	// Load default
-	err = configurations.LoadSpec(req.Spec, &p.Spec, shared.BaseLogger(p.PluginLogger))
+	endpoints, err := p.CreateEndpoints()
 	if err != nil {
-		return nil, err
+		return nil, p.Wrapf(err, "cannot create endpoints")
 	}
 
-	//	May override or check spec here
-	spec, err := configurations.SerializeSpec(p.Spec)
-	if err != nil {
-		return nil, err
-	}
-
-	return &factoryv1.CreateResponse{
-		Spec: spec,
-	}, nil
+	return p.Base.PostCreate(p.Spec, endpoints...)
 }
 
 func (p *Factory) Update(req *factoryv1.UpdateRequest) (*factoryv1.UpdateResponse, error) {
@@ -107,6 +102,14 @@ func (p *Factory) Update(req *factoryv1.UpdateRequest) (*factoryv1.UpdateRespons
 func (p *Factory) Communicate(req *corev1.Engage) (*corev1.InformationRequest, error) {
 	// TODO implement me
 	panic("implement me")
+}
+
+func (p *Factory) CreateEndpoints() ([]*corev1.Endpoint, error) {
+	rest, err := services.NewHttpApi(&configurations.Endpoint{Name: p.Identity.Name, Public: true})
+	if err != nil {
+		return nil, p.Wrapf(err, "cannot  create tcp endpoint")
+	}
+	return []*corev1.Endpoint{rest}, nil
 }
 
 //go:embed templates/factory
