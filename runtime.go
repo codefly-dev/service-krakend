@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"embed"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path"
 
 	"github.com/codefly-dev/cli/pkg/plugins/communicate"
@@ -12,6 +15,7 @@ import (
 	servicev1 "github.com/codefly-dev/cli/proto/v1/services"
 	runtimev1 "github.com/codefly-dev/cli/proto/v1/services/runtime"
 	"github.com/codefly-dev/core/configurations"
+	"github.com/codefly-dev/core/shared"
 )
 
 type Runtime struct {
@@ -70,34 +74,92 @@ func (p *Runtime) Configure(req *runtimev1.ConfigureRequest) (*runtimev1.Configu
 	return &runtimev1.ConfigureResponse{Status: services.ConfigureSuccess()}, nil
 }
 
+// Settings will contain all the static information
+// JSON -- yaml not working
+type Settings struct {
+	Group []Forwarding `json:"group"`
+}
+
+type Backend struct {
+	URL  string `json:"url"`
+	Hosts []string `json:"hosts"`
+}
+
+type Forwarding struct {
+	Target  string  `json:"target"`
+	Backend Backend `json:"backend"`
+}
+
+func gatewayTarget(r *configurations.RestRoute) string {
+	return fmt.Sprintf("%s/%s%s", r.Application, r.Service, r.Path)
+}
+
+func (p *Runtime) writeConfig(nms []*runtimev1.NetworkMapping) error {
+	// Write the main config
+	err := shared.Embed(config).Copy("krakend.tmpl", p.Local("config/krakend.tmpl"))
+	if err != nil {
+		return p.PluginLogger.Wrapf(err, "cannot copy config")
+	}
+
+	settings := Settings{}
+	for _, route := range p.Routes {
+		nm, err := services.NetworkMappingForRoute(p.Context(), route, nms)
+		if err != nil {
+			return p.PluginLogger.Wrapf(err, "cannot get network mapping for route")
+		}
+		settings.Group = append(settings.Group, Forwarding{
+			Target: gatewayTarget(route),
+			Backend: Backend{
+				URL: route.Path,
+				Hosts: nm.Addresses,
+			},
+		})
+	}
+	target := p.Local("config/settings/routes.json")
+	content, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return p.PluginLogger.Wrapf(err, "cannot marshal settings")
+	}
+	err = os.WriteFile(target, content, 0o644)
+	if err != nil {
+		return p.PluginLogger.Wrapf(err, "cannot write settings to %s", target)
+	}
+	return nil
+}
+
 func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, error) {
 	defer p.PluginLogger.Catch()
+
 
 	p.PluginLogger.DebugMe("%s: network mapping: %v", p.Identity.Name, req.NetworkMappings)
 	p.PluginLogger.DebugMe("%s: routes", p.Routes)
 
+	err := p.writeConfig(req.NetworkMappings)
+	if err != nil {
+		p.PluginLogger.DebugMe("OOPS %v", err)
+		return nil, p.PluginLogger.Wrapf(err, "cannot write config")
+	}
+
 	envs := []string{
 		"FC_ENABLE=1",
-		"FC_OUT=/etc/krakend/out.json",
-		"FC_PARTIALS=config/partials",
-		"FC_SETTINGS=config/settings/local",
-		"FC_TEMPLATES=config/templates",
+		"FC_OUT=" + p.Local("out.yaml"),
+		"FC_SETTINGS=" + p.Local("config/settings"),
 	}
 
 	p.Runner = &runners.Runner{
 		Name:          p.Base.Identity.Name,
 		Bin:           "krakend",
-		Args:          []string{"run", "--config", "krakend.config"},
+		Args:          []string{"run", "-d", "--config", p.Local("config/krakend.tmpl")},
 		Envs:          envs,
 		Dir:           p.Location,
 		Debug:         true,
 		ServiceLogger: p.ServiceLogger,
 		PluginLogger:  p.PluginLogger,
-		Cmd:           nil,
 	}
 
-	err := p.Runner.Init(context.Background())
+	err = p.Runner.Init(context.Background())
 	if err != nil {
+		p.PluginLogger.DebugMe("OOPS %v", err)
 		return &runtimev1.StartResponse{
 			Status: services.StartError(err),
 		}, nil
@@ -105,6 +167,7 @@ func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, 
 
 	tracker, err := p.Runner.Run(context.Background())
 	if err != nil {
+		p.PluginLogger.DebugMe("OOPS %v", err)
 		return &runtimev1.StartResponse{
 			Status: services.StartError(err),
 		}, nil
@@ -250,3 +313,6 @@ func (p *Runtime) Communicate(req *corev1.Engage) (*corev1.InformationRequest, e
 /* Details
 
  */
+
+//go:embed krakend.tmpl
+var config embed.FS

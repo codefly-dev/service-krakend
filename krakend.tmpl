@@ -1,0 +1,24 @@
+version: 3
+timeout: "3s"
+endpoints:
+{{ range $endpoint := .routes.group }}
+    - endpoint: {{ $endpoint.target }}
+      backend:
+        - url_pattern: {{ $endpoint.backend.url }}
+          host:
+          {{ range $host := $endpoint.backend.hosts }}
+            - {{ $host }}
+          {{ end }}
+{{ end }}
+
+#  - endpoint: /version
+#    extra_config:
+#      auth/validator:
+#        alg: RS256
+#        audience:
+#          - https://codefly.ai
+#        jwk_url: https://dev-4c24vdpgjj3eyqmy.us.auth0.com/.well-known/jwks.json
+#    backend:
+#      - url_pattern: /version
+#        host:
+#          - http://localhost:11736

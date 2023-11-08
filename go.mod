@@ -1,4 +1,4 @@
-module github.com/codefly-dev/base
+module github.com/codefly-dev/krakend
 
 go 1.21.3
 

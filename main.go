@@ -26,18 +26,6 @@ func NewService() *Service {
 	}
 }
 
-type EndpointForwarding struct {
-	Endpoint string `yaml:"endpoint"`
-}
-
-type ServiceForwarding struct {
-	Endpoints []EndpointForwarding `yaml:"endpoints"`
-}
-
-type ApplicationForwarding struct {
-	Services []ServiceForwarding `yaml:"services"`
-}
-
 type Spec struct {
 	Debug bool `yaml:"debug"` // Developer only
 }
