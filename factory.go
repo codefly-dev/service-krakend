@@ -83,7 +83,7 @@ func (p *Factory) Init(req *servicev1.InitRequest) (*factoryv1.InitResponse, err
 		return nil, err
 	}
 
-	channels, err := p.WithCommunications(services.NewChannel(communicate.Create, p.create))
+	channels, err := p.WithCommunications(services.NewChannel(communicate.Create, p.create), services.NewDynamicChannel(communicate.Sync))
 	if err != nil {
 		return nil, err
 	}
@@ -98,8 +98,10 @@ func (p *Factory) Welcome() (*corev1.Message, map[string]string) {
 Some of the things this plugin provides for you:
 - auto-generate configuration to expose routes
 - authentication with your authentication provider
-- CORS configuration
-- Coming soon: authorization
+- correct CORS configuration
+
+#(bold,cyan)[Coming soon: authorization]
+
 Are you excited?`}, map[string]string{
 			"PluginName":      plugin.Identifier,
 			"PluginPublisher": plugin.Publisher,
@@ -198,10 +200,9 @@ func (p *Factory) Sync(req *factoryv1.SyncRequest) (*factoryv1.SyncResponse, err
 	defer p.PluginLogger.Catch()
 
 	p.DebugMe("known routes: %v", p.Routes)
-	// This is the first call
 	if p.sync == nil {
 		// From request
-		p.PluginLogger.DebugMe("first call to sync")
+		p.PluginLogger.DebugMe("Setup communication")
 
 		// Detect if we have unknown routing and create them
 		routes := v1.DetectNewRoutes(p.Context(), configurations.UnwrapRoutes(p.Routes), req.DependencyEndpointGroup)
