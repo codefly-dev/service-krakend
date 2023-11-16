@@ -78,11 +78,6 @@ func (p *Factory) Init(req *servicev1.InitRequest) (*factoryv1.InitResponse, err
 		return nil, err
 	}
 
-	p.create, err = p.NewCreateCommunicate()
-	if err != nil {
-		return nil, err
-	}
-
 	channels, err := p.WithCommunications(services.NewChannel(communicate.Create, p.create), services.NewDynamicChannel(communicate.Sync))
 	if err != nil {
 		return nil, err
@@ -120,6 +115,20 @@ func (p *Factory) NewCreateCommunicate() (*communicate.ClientContext, error) {
 func (p *Factory) Create(req *factoryv1.CreateRequest) (*factoryv1.CreateResponse, error) {
 	defer p.PluginLogger.Catch()
 
+	if p.create == nil {
+		// Initial setup
+		var err error
+		p.PluginLogger.DebugMe("Setup communication")
+		p.create, err = p.NewCreateCommunicate()
+		if err != nil {
+			return nil, p.PluginLogger.Wrapf(err, "cannot setup up communication")
+		}
+		err = p.Wire(communicate.Create, p.create)
+		if err != nil {
+			return nil, p.PluginLogger.Wrapf(err, "cannot wire communication")
+		}
+		return &factoryv1.CreateResponse{NeedCommunication: true}, nil
+	}
 	// Make sure the communication for create has been done successfully
 	if !p.create.Ready() {
 		return nil, p.PluginLogger.Errorf("create: communication not ready")
@@ -270,11 +279,6 @@ func (p *Factory) Build(req *factoryv1.BuildRequest) (*factoryv1.BuildResponse, 
 func (p *Factory) Deploy(req *factoryv1.DeploymentRequest) (*factoryv1.DeploymentResponse, error) {
 	defer p.PluginLogger.Catch()
 	return &factoryv1.DeploymentResponse{}, nil
-}
-
-func (p *Factory) Communicate(req *corev1.Engage) (*corev1.InformationRequest, error) {
-	// TODO implement me
-	panic("implement me")
 }
 
 func (p *Factory) CreateEndpoints() error {
