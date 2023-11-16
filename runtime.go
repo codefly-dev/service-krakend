@@ -2,13 +2,8 @@ package main
 
 import (
 	"context"
-	"embed"
-	"encoding/json"
-	"fmt"
-	"os"
-	"path"
-
 	"github.com/codefly-dev/cli/pkg/plugins/communicate"
+	"github.com/codefly-dev/cli/pkg/plugins/endpoints"
 	"github.com/codefly-dev/cli/pkg/plugins/network"
 	"github.com/codefly-dev/cli/pkg/plugins/services"
 	"github.com/codefly-dev/cli/pkg/runners"
@@ -16,26 +11,15 @@ import (
 	servicev1 "github.com/codefly-dev/cli/proto/v1/services"
 	runtimev1 "github.com/codefly-dev/cli/proto/v1/services/runtime"
 	"github.com/codefly-dev/core/configurations"
-	"github.com/codefly-dev/core/shared"
 )
 
 type Runtime struct {
 	*Service
 
-	Endpoint *corev1.Endpoint
-	Port                int
-
-	// State
-	Routes         []*configurations.RestRoute
-	RoutesLocation string
+	Port int
 
 	// internal
 	Runner *runners.Runner
-
-	// TODO: Get is to work first, then refactor
-	sync                communicate.Client
-	syncRoutes          []*configurations.RestRoute
-	syncRoutesQuestions []*corev1.Question
 }
 
 func NewRuntime() *Runtime {
@@ -45,33 +29,36 @@ func NewRuntime() *Runtime {
 	}
 }
 
+type Auth struct {
+	Protected bool `yaml:"protected"`
+}
+
+// RestRoute extends the concept of RestRoute to add Auth aspects
+type RestRoute = configurations.ExtendedRestRoute[Auth]
+
 func (p *Runtime) Init(req *servicev1.InitRequest) (*runtimev1.InitResponse, error) {
 	defer p.PluginLogger.Catch()
 
-	err := p.Base.Init(req, &p.Spec)
+	err := p.Base.Init(req, p.Settings)
 	if err != nil {
-		return nil, err
-	}
-	p.Endpoint, err = services.NewHttpApi(&configurations.Endpoint{Name: p.Identity.Name, Public: true})
-	if err != nil {
-		return nil, p.Wrapf(err, "cannot  create tcp endpoint")
+		return p.Base.RuntimeInitResponseError(err)
 	}
 
-	// From configuration
+	p.Endpoint, err = endpoints.NewRestApi(&configurations.Endpoint{Name: p.Identity.Name, Api: configurations.Rest, Public: true})
+	if err != nil {
+		return p.Base.RuntimeInitResponseError(err)
+	}
+
+	// From configurations
 	err = p.LoadRoutes()
 	if err != nil {
-		return nil, p.PluginLogger.Wrapf(err, "cannot load routes")
+		return p.Base.RuntimeInitResponseError(err)
 	}
-
 	channels, err := p.WithCommunications(services.NewDynamicChannel(communicate.Sync))
 	if err != nil {
-		return nil, err
+		return p.Base.RuntimeInitResponseError(err)
 	}
-
-	return &runtimev1.InitResponse{
-		Version:  p.Base.Version(),
-		Channels: channels,
-	}, nil
+	return p.Base.RuntimeInitResponse(p.Endpoints, channels...)
 }
 
 func (p *Runtime) Configure(req *runtimev1.ConfigureRequest) (*runtimev1.ConfigureResponse, error) {
@@ -79,82 +66,28 @@ func (p *Runtime) Configure(req *runtimev1.ConfigureRequest) (*runtimev1.Configu
 
 	nets, err := p.Network()
 	if err != nil {
-		return nil, p.Wrapf(err, "cannot create default endpoint")
+		return &runtimev1.ConfigureResponse{Status: services.ConfigureError(err)}, nil
 	}
+
 	return &runtimev1.ConfigureResponse{Status: services.ConfigureSuccess(),
 		NetworkMappings: nets}, nil
-}
-
-// Settings will contain all the static information
-// JSON -- yaml not working
-type Settings struct {
-	Port int         `json:"port"`
-	Group []Forwarding `json:"group"`
-}
-
-type Backend struct {
-	URL   string   `json:"url"`
-	Hosts []string `json:"hosts"`
-}
-
-type Forwarding struct {
-	Target  string  `json:"target"`
-	Backend Backend `json:"backend"`
-}
-
-func gatewayTarget(r *configurations.RestRoute) string {
-	return fmt.Sprintf("%s/%s%s", r.Application, r.Service, r.Path)
-}
-
-func (p *Runtime) writeConfig(nms []*runtimev1.NetworkMapping) error {
-
-	// Write the main config
-	err := shared.Embed(config).Copy("krakend.tmpl", p.Local("config/krakend.tmpl"))
-	if err != nil {
-		return p.PluginLogger.Wrapf(err, "cannot copy config")
-	}
-
-	settings := Settings{Port: p.Port}
-	for _, route := range p.Routes {
-		nm, err := services.NetworkMappingForRoute(p.Context(), route, nms)
-		if err != nil {
-			return p.PluginLogger.Wrapf(err, "cannot get network mapping for route")
-		}
-		settings.Group = append(settings.Group, Forwarding{
-			Target: gatewayTarget(route),
-			Backend: Backend{
-				URL:   route.Path,
-				Hosts: nm.Addresses,
-			},
-		})
-	}
-	target := p.Local("config/settings/routes.json")
-	content, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return p.PluginLogger.Wrapf(err, "cannot marshal settings")
-	}
-	err = os.WriteFile(target, content, 0o644)
-	if err != nil {
-		return p.PluginLogger.Wrapf(err, "cannot write settings to %s", target)
-	}
-	return nil
 }
 
 func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, error) {
 	defer p.PluginLogger.Catch()
 
-	p.PluginLogger.DebugMe("%s: network mapping: %v", p.Identity.Name, req.NetworkMappings)
-	p.PluginLogger.DebugMe("%s: routes", p.Routes)
+	p.PluginLogger.DebugMe("%s: network mapping: #%d", p.Identity.Name, len(req.NetworkMappings))
+	p.PluginLogger.DebugMe("%s: routing", p.Routes)
 
 	err := p.writeConfig(req.NetworkMappings)
 	if err != nil {
-		p.PluginLogger.DebugMe("OOPS %v", err)
+		p.PluginLogger.DebugMe("cannot write config: %v", err)
 		return nil, p.PluginLogger.Wrapf(err, "cannot write config")
 	}
 
 	envs := []string{
 		"FC_ENABLE=1",
-		"FC_OUT=" + p.Local("out.yaml"),
+		"FC_OUT=" + p.Local("out.json"),
 		"FC_SETTINGS=" + p.Local("config/settings"),
 	}
 
@@ -171,7 +104,7 @@ func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, 
 
 	err = p.Runner.Init(context.Background())
 	if err != nil {
-		p.PluginLogger.DebugMe("OOPS %v", err)
+		p.PluginLogger.DebugMe("runner init failed %v", err)
 		return &runtimev1.StartResponse{
 			Status: services.StartError(err),
 		}, nil
@@ -180,11 +113,12 @@ func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, 
 	//p.Runner.Wait = true
 	tracker, err := p.Runner.Run(context.Background())
 	if err != nil {
-		p.PluginLogger.DebugMe("OOPS %v", err)
+		p.PluginLogger.DebugMe("runner failed %v", err)
 		return &runtimev1.StartResponse{
 			Status: services.StartError(err),
 		}, nil
 	}
+	p.DebugMe("after run")
 
 	return &runtimev1.StartResponse{
 		Status:   services.StartSuccess(),
@@ -208,118 +142,8 @@ func (p *Runtime) Stop(req *runtimev1.StopRequest) (*runtimev1.StopResponse, err
 	return &runtimev1.StopResponse{}, nil
 }
 
-func (p *Runtime) NewSyncCommunicate(routes []*configurations.RestRoute) error {
-	if len(routes) == 0 {
-		p.PluginLogger.Info("no new routes detected")
-		p.sync = communicate.NewNoOpClientContext()
-		return nil
-	}
-	client := communicate.NewClientContext(communicate.Sync, p.PluginLogger)
-	// Set the state of sync communicate
-	for _, route := range routes {
-		p.syncRoutes = append(p.syncRoutes, route)
-		p.syncRoutesQuestions = append(p.syncRoutesQuestions,
-			client.NewConfirm(&corev1.Message{
-				Name:    route.Path,
-				Message: fmt.Sprintf("Want to expose %s: %v?", route.Path, route.Methods),
-			}, true))
-	}
-	err := client.NewSequence(
-		p.syncRoutesQuestions...,
-	)
-	if err != nil {
-		return p.PluginLogger.Wrapf(err, "can't create sequence")
-	}
-	p.sync = client
-	err = p.Wire(communicate.Sync, client)
-	if err != nil {
-		return p.PluginLogger.Wrapf(err, "cannot wire")
-	}
-	return nil
-}
-
-// LoadRoutes from routes configuration folder
-func (p *Runtime) LoadRoutes() error {
-	p.RoutesLocation = path.Join(p.Location, "codefly/routes")
-	var err error
-	p.Routes, err = services.LoadApplicationRoutes(p.RoutesLocation, p.PluginLogger)
-	if err != nil {
-		return p.PluginLogger.Wrapf(err, "cannot load routes")
-	}
-	return nil
-}
-
-func (p *Runtime) Sync(req *runtimev1.SyncRequest) (*runtimev1.SyncResponse, error) {
-	defer p.PluginLogger.Catch()
-
-	// This is the first call
-	if p.sync == nil {
-		// From request
-		p.PluginLogger.DebugMe("first call to sync")
-		routes := services.ConvertApplicationRoutes(req.Routes)
-		p.PluginLogger.DebugMe("received from request routes: %v", routes)
-
-		p.PluginLogger.DebugMe("loaded from configuration routes: %v", p.Routes)
-
-		// Detect if we have unknown routes
-		routes = services.DetectNewRoutes(p.Routes, routes)
-		p.PluginLogger.DebugMe("new routes detected: %v", routes)
-
-		err := p.NewSyncCommunicate(routes)
-		if err != nil {
-			return nil, p.PluginLogger.Wrapf(err, "cannot create sync communicate")
-		}
-		if p.sync == nil {
-			return nil, p.PluginLogger.Errorf("sync: after new sync communicate == nil")
-		}
-		if len(p.syncRoutesQuestions) > 0 {
-			p.PluginLogger.DebugMe("we need some communication!")
-			return &runtimev1.SyncResponse{NeedCommunication: true}, nil
-		} else {
-			return &runtimev1.SyncResponse{NeedCommunication: false}, nil
-		}
-	}
-	if p.sync == nil {
-		return nil, p.PluginLogger.Errorf("sync: after sync == nil")
-	}
-
-	if state := p.sync.(*communicate.ClientContext); state != nil {
-		for i := range p.syncRoutesQuestions {
-			expose := state.Confirm(i).Confirmed
-			if expose {
-				route := p.syncRoutes[i]
-				p.PluginLogger.DebugMe("exposing %s", route.Path)
-				err := route.Save(p.RoutesLocation, p.PluginLogger)
-				if err != nil {
-					return nil, p.PluginLogger.Wrapf(err, "cannot save route")
-				}
-			}
-		}
-	}
-
-	// Make sure the communication for create has been done successfully
-	if !p.sync.Ready() {
-		return nil, p.PluginLogger.Errorf("sync: validation communication not ready")
-	}
-
-	return &runtimev1.SyncResponse{}, nil
-}
-
-func (p *Runtime) Build(req *runtimev1.BuildRequest) (*runtimev1.BuildResponse, error) {
-	defer p.PluginLogger.Catch()
-
-	p.PluginLogger.Debugf("building docker image")
-
-	return &runtimev1.BuildResponse{}, nil
-}
-
-func (p *Runtime) Deploy(req *runtimev1.DeploymentRequest) (*runtimev1.DeploymentResponse, error) {
-	defer p.PluginLogger.Catch()
-	return &runtimev1.DeploymentResponse{}, nil
-}
-
 func (p *Runtime) Communicate(req *corev1.Engage) (*corev1.InformationRequest, error) {
-	p.PluginLogger.DebugMe("factory communicate: %v", req)
+	p.DebugMe("factory communicate: %v", req)
 	return p.Base.Communicate(req)
 }
 
@@ -328,8 +152,12 @@ func (p *Runtime) Communicate(req *corev1.Engage) (*corev1.InformationRequest, e
  */
 
 func (p *Runtime) Network() ([]*runtimev1.NetworkMapping, error) {
-	pm := network.NewServicePortManager(p.Identity, p.Endpoint)
-	err := pm.Expose(p.Endpoint)
+	p.DebugMe("in network")
+	pm, err := network.NewServicePortManager(p.Context(), p.Identity)
+	if err != nil {
+		return nil, p.Wrapf(err, "cannot create network manager")
+	}
+	err = pm.Expose(p.Endpoint)
 	if err != nil {
 		return nil, p.Wrapf(err, "cannot add grpc endpoint to network manager")
 	}
@@ -343,6 +171,3 @@ func (p *Runtime) Network() ([]*runtimev1.NetworkMapping, error) {
 	}
 	return pm.NetworkMapping()
 }
-
-//go:embed krakend.tmpl
-var config embed.FS

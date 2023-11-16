@@ -18,8 +18,8 @@ github.com/charmbracelet/bubbletea v0.24.2 h1:uaQIKx9Ai6Gdh5zpTbGiWpytMU+CfsPp06
 github.com/charmbracelet/bubbletea v0.24.2/go.mod h1:XdrNrV4J8GiyshTtx3DNuYkR1FDaJmO3l2nejekbsgg=
 github.com/cheggaaa/pb/v3 v3.1.4 h1:DN8j4TVVdKu3WxVwcRKu0sG00IIU6FewoABZzXbRQeo=
 github.com/cheggaaa/pb/v3 v3.1.4/go.mod h1:6wVjILNBaXMs8c21qRiaUM8BR82erfgau1DQ4iUXmSA=
-github.com/codefly-dev/cli v0.0.0-20231108070622-7316ddfe050b h1:Zns6n4WDInJrJqp/2sjBrZBaOCVEBpJRRtP3jFachiQ=
-github.com/codefly-dev/cli v0.0.0-20231108070622-7316ddfe050b/go.mod h1:OqsKVjJgZPkLO8WGEsvhcepD9WB+N7JmUqJP3KAN9KY=
+github.com/codefly-dev/cli v0.0.0-20231108112824-601efed8b9a5 h1:7CGvQEePinxtlIlkxF6uHkdZ9ljatxkhIWaf7yQgqn0=
+github.com/codefly-dev/cli v0.0.0-20231108112824-601efed8b9a5/go.mod h1:OqsKVjJgZPkLO8WGEsvhcepD9WB+N7JmUqJP3KAN9KY=
 github.com/codefly-dev/core v0.0.12 h1:g3uPLGPNjTlLFe2mNBzQ1zLljxZe+Z+8n7XKV50u4uE=
 github.com/codefly-dev/core v0.0.12/go.mod h1:rF2cwWzL17c3qJy56hk5BNL3RoD5yGVfOFTv6TTPKPg=
 github.com/codefly-dev/golor v0.0.10 h1:eqNxY3aSVbXDWo+3S9fcRynCEStPNo033owzwvzziOQ=
