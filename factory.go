@@ -91,11 +91,11 @@ func (p *Factory) Init(req *servicev1.InitRequest) (*factoryv1.InitResponse, err
 func (p *Factory) Welcome() (*corev1.Message, map[string]string) {
 	return &corev1.Message{Message: `Welcome to the service plugin #(bold,cyan)[go-grc] by plugin #(bold,cyan)[codefly.ai]
 Some of the things this plugin provides for you:
-- auto-generate configuration to expose routes
+- auto-detection of route
 - authentication with your authentication provider
 - correct CORS configuration
-
 #(bold,cyan)[Coming soon: authorization]
+#(bold,cyan)[Coming soon: openAPI output]
 
 Are you excited?`}, map[string]string{
 			"PluginName":      plugin.Identifier,
