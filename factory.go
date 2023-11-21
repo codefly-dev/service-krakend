@@ -150,7 +150,7 @@ func (p *Factory) Create(req *factoryv1.CreateRequest) (*factoryv1.CreateRespons
 	if err != nil {
 		return nil, p.Wrapf(err, "cannot create routing directory")
 	}
-	err = p.CreateEndpoints()
+	err = p.LoadEndpoints()
 	if err != nil {
 		return nil, p.Wrapf(err, "cannot create endpoints")
 	}
@@ -281,9 +281,9 @@ func (p *Factory) Deploy(req *factoryv1.DeploymentRequest) (*factoryv1.Deploymen
 	return &factoryv1.DeploymentResponse{}, nil
 }
 
-func (p *Factory) CreateEndpoints() error {
+func (p *Factory) LoadEndpoints() error {
 	var err error
-	p.Endpoint, err = endpoints.NewRestApi(&configurations.Endpoint{Name: p.Identity.Name, Public: true})
+	p.Endpoint, err = endpoints.NewRestApi(&configurations.Endpoint{Name: p.Identity.Name})
 	if err != nil {
 		return p.Wrapf(err, "cannot  create tcp endpoint")
 	}

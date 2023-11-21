@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"github.com/codefly-dev/cli/pkg/plugins/communicate"
-	"github.com/codefly-dev/cli/pkg/plugins/endpoints"
 	"github.com/codefly-dev/cli/pkg/plugins/network"
 	"github.com/codefly-dev/cli/pkg/plugins/services"
 	"github.com/codefly-dev/cli/pkg/runners"
@@ -44,10 +43,10 @@ func (p *Runtime) Init(req *servicev1.InitRequest) (*runtimev1.InitResponse, err
 		return p.Base.RuntimeInitResponseError(err)
 	}
 
-	p.Endpoint, err = endpoints.NewRestApi(&configurations.Endpoint{Name: p.Identity.Name, Api: configurations.Rest, Public: true})
-	if err != nil {
-		return p.Base.RuntimeInitResponseError(err)
-	}
+	//p.Endpoint, err = endpoints.NewRestApi(&configurations.Endpoint{Name: p.Identity.Name, Api: configurations.Rest, Public: true})
+	//if err != nil {
+	//	return p.Base.RuntimeInitResponseError(err)
+	//}
 
 	// From configurations
 	err = p.LoadRoutes()
