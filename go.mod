@@ -3,8 +3,6 @@ module github.com/codefly-dev/krakend
 go 1.21.4
 
 require (
-	github.com/codefly-dev/cli v0.0.1
-	github.com/codefly-dev/core v0.0.13
 	golang.org/x/text v0.14.0
 )
 

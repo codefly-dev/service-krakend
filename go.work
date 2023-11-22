@@ -6,6 +6,4 @@ use (
 	../../../../codefly.dev/core
 )
 
-replace github.com/codefly-dev/core v0.0.1 => ../../../../codefly.dev/core
-
-replace github.com/codefly-dev/cli v0.0.1 => ../../../../codefly.dev/cli
+replace github.com/codefly-dev/core v0.0.19 => ../../../../codefly.dev/core

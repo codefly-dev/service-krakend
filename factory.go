@@ -4,7 +4,6 @@ import (
 	"embed"
 	"fmt"
 	"github.com/codefly-dev/cli/pkg/plugins/communicate"
-	"github.com/codefly-dev/cli/pkg/plugins/endpoints"
 	"github.com/codefly-dev/cli/pkg/plugins/network"
 	"github.com/codefly-dev/cli/pkg/plugins/services"
 	v1 "github.com/codefly-dev/cli/pkg/types/v1"
@@ -118,7 +117,7 @@ func (p *Factory) Create(req *factoryv1.CreateRequest) (*factoryv1.CreateRespons
 	if p.create == nil {
 		// Initial setup
 		var err error
-		p.PluginLogger.DebugMe("Setup communication")
+		p.DebugMe("Setup communication")
 		p.create, err = p.NewCreateCommunicate()
 		if err != nil {
 			return nil, p.PluginLogger.Wrapf(err, "cannot setup up communication")
@@ -211,13 +210,13 @@ func (p *Factory) Sync(req *factoryv1.SyncRequest) (*factoryv1.SyncResponse, err
 	p.DebugMe("known routes: %v", p.Routes)
 	if p.sync == nil {
 		// From request
-		p.PluginLogger.DebugMe("Setup communication")
+		p.DebugMe("Setup communication")
 
 		// Detect if we have unknown routing and create them
 		routes := v1.DetectNewRoutes(p.Context(), configurations.UnwrapRoutes(p.Routes), req.DependencyEndpointGroup)
 
 		if len(routes) == 0 {
-			p.PluginLogger.DebugMe("no new routing detected")
+			p.DebugMe("no new routing detected")
 			p.sync = communicate.NewNoOpClientContext()
 			return &factoryv1.SyncResponse{}, nil
 		}
@@ -229,7 +228,7 @@ func (p *Factory) Sync(req *factoryv1.SyncRequest) (*factoryv1.SyncResponse, err
 			return nil, p.PluginLogger.Errorf("sync: after new sync communicate == nil")
 		}
 		if len(p.syncRoutesQuestions) > 0 {
-			p.PluginLogger.DebugMe("we need some communication!")
+			p.DebugMe("we need some communication!")
 			return &factoryv1.SyncResponse{NeedCommunication: true}, nil
 		} else {
 			return &factoryv1.SyncResponse{NeedCommunication: false}, nil
@@ -244,7 +243,7 @@ func (p *Factory) Sync(req *factoryv1.SyncRequest) (*factoryv1.SyncResponse, err
 			expose := state.Confirm(i).Confirmed
 			if expose {
 				route := p.syncRoutes[i]
-				p.PluginLogger.DebugMe("exposing %s", route.Path)
+				p.DebugMe("exposing %s", route.Path)
 				err := route.Save(p.Context(), p.RoutesLocation)
 				if err != nil {
 					return nil, p.PluginLogger.Wrapf(err, "cannot save route")
@@ -282,11 +281,11 @@ func (p *Factory) Deploy(req *factoryv1.DeploymentRequest) (*factoryv1.Deploymen
 }
 
 func (p *Factory) LoadEndpoints() error {
-	var err error
-	p.Endpoint, err = endpoints.NewRestApi(&configurations.Endpoint{Name: p.Identity.Name})
-	if err != nil {
-		return p.Wrapf(err, "cannot  create tcp endpoint")
-	}
+	//var err error
+	//p.Endpoint, err = endpoints.NewRestApi(&configurations.Endpoint{Name: p.Identity.Name})
+	//if err != nil {
+	//	return p.Wrapf(err, "cannot  create tcp endpoint")
+	//}
 	return nil
 }
 

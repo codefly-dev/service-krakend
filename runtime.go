@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"github.com/codefly-dev/cli/pkg/plugins/communicate"
+	"github.com/codefly-dev/cli/pkg/plugins/endpoints"
 	"github.com/codefly-dev/cli/pkg/plugins/network"
 	"github.com/codefly-dev/cli/pkg/plugins/services"
 	"github.com/codefly-dev/cli/pkg/runners"
@@ -43,10 +44,10 @@ func (p *Runtime) Init(req *servicev1.InitRequest) (*runtimev1.InitResponse, err
 		return p.Base.RuntimeInitResponseError(err)
 	}
 
-	//p.Endpoint, err = endpoints.NewRestApi(&configurations.Endpoint{Name: p.Identity.Name, Api: configurations.Rest, Public: true})
-	//if err != nil {
-	//	return p.Base.RuntimeInitResponseError(err)
-	//}
+	p.Endpoint, err = endpoints.NewRestApi(&configurations.Endpoint{Name: p.Identity.Name, Api: configurations.Rest, Scope: "public"})
+	if err != nil {
+		return p.Base.RuntimeInitResponseError(err)
+	}
 
 	// From configurations
 	err = p.LoadRoutes()
@@ -75,13 +76,13 @@ func (p *Runtime) Configure(req *runtimev1.ConfigureRequest) (*runtimev1.Configu
 func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, error) {
 	defer p.PluginLogger.Catch()
 
-	p.PluginLogger.DebugMe("%s: network mapping: #%d", p.Identity.Name, len(req.NetworkMappings))
-	p.PluginLogger.DebugMe("%s: routing", p.Routes)
+	p.DebugMe("%s: network mapping: #%d", p.Identity.Name, len(req.NetworkMappings))
+	p.DebugMe("%s: routing", p.Routes)
 
 	err := p.writeConfig(req.NetworkMappings)
 	if err != nil {
-		p.PluginLogger.DebugMe("cannot write config: %v", err)
-		return nil, p.PluginLogger.Wrapf(err, "cannot write config")
+		p.DebugMe("cannot write config: %v", err)
+		return nil, p.Wrapf(err, "cannot write config")
 	}
 
 	envs := []string{
@@ -103,16 +104,15 @@ func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, 
 
 	err = p.Runner.Init(context.Background())
 	if err != nil {
-		p.PluginLogger.DebugMe("runner init failed %v", err)
+		p.DebugMe("runner init failed %v", err)
 		return &runtimev1.StartResponse{
 			Status: services.StartError(err),
 		}, nil
 	}
 	// useful for debugging -- while I fix the error handling with Start
-	//p.Runner.Wait = true
 	tracker, err := p.Runner.Run(context.Background())
 	if err != nil {
-		p.PluginLogger.DebugMe("runner failed %v", err)
+		p.DebugMe("runner failed %v", err)
 		return &runtimev1.StartResponse{
 			Status: services.StartError(err),
 		}, nil
