@@ -77,6 +77,8 @@ func (p *Factory) Init(req *servicev1.InitRequest) (*factoryv1.InitResponse, err
 		return nil, err
 	}
 
+	p.RoutesLocation = p.Local("routing")
+
 	channels, err := p.WithCommunications(services.NewChannel(communicate.Create, p.create), services.NewDynamicChannel(communicate.Sync))
 	if err != nil {
 		return nil, err
@@ -184,10 +186,11 @@ func (p *Factory) NewSyncCommunicate(routes []*configurations.RestRoute) error {
 	// Set the state of sync communicate
 	for _, route := range routes {
 		p.syncRoutes = append(p.syncRoutes, route)
+		fullPath := fmt.Sprintf("%s/%s%s", route.Application, route.Service, route.Path)
 		p.syncRoutesQuestions = append(p.syncRoutesQuestions,
 			client.NewConfirm(&corev1.Message{
-				Name:    route.Path,
-				Message: fmt.Sprintf("Want to expose %s: %v?", route.Path, route.Methods),
+				Name:    fullPath,
+				Message: fmt.Sprintf("Want to expose %s: %v?", fullPath, route.Methods),
 			}, true))
 	}
 	questions := []*corev1.Question{client.Display(p.SyncMessage())}
@@ -240,7 +243,12 @@ func (p *Factory) Sync(req *factoryv1.SyncRequest) (*factoryv1.SyncResponse, err
 
 	if state := p.sync.(*communicate.ClientContext); state != nil {
 		for i := range p.syncRoutesQuestions {
-			expose := state.Confirm(i).Confirmed
+			p.DebugMe("state: %v", state.Get())
+			confirm, err := state.SafeConfirm(i + 1) // because of the initial message
+			if err != nil {
+				return nil, p.PluginLogger.Wrapf(err, "cannot get confirm")
+			}
+			expose := confirm.Confirmed
 			if expose {
 				route := p.syncRoutes[i]
 				p.DebugMe("exposing %s", route.Path)

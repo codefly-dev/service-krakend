@@ -44,6 +44,8 @@ func (p *Runtime) Init(req *servicev1.InitRequest) (*runtimev1.InitResponse, err
 		return p.Base.RuntimeInitResponseError(err)
 	}
 
+	p.RoutesLocation = p.Local("routing")
+
 	p.Endpoint, err = endpoints.NewRestApi(&configurations.Endpoint{Name: p.Identity.Name, Api: configurations.Rest, Scope: "public"})
 	if err != nil {
 		return p.Base.RuntimeInitResponseError(err)

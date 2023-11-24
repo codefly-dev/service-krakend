@@ -2,11 +2,9 @@ package main
 
 import (
 	"embed"
-	corev1 "github.com/codefly-dev/cli/proto/v1/core"
-	"path"
-
 	"github.com/codefly-dev/cli/pkg/plugins"
 	"github.com/codefly-dev/cli/pkg/plugins/services"
+	corev1 "github.com/codefly-dev/cli/proto/v1/core"
 	"github.com/codefly-dev/core/configurations"
 	"github.com/codefly-dev/core/shared"
 )
@@ -35,7 +33,6 @@ func NewService() *Service {
 
 // LoadRoutes from routing configuration folder
 func (p *Service) LoadRoutes() error {
-	p.RoutesLocation = path.Join(p.Location, "routing")
 	var err error
 	p.Routes, err = configurations.LoadApplicationExtendedRoutes[Auth](p.RoutesLocation, p.PluginLogger)
 	if err != nil {
