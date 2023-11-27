@@ -2,10 +2,7 @@ module github.com/codefly-dev/go-grpc
 
 go 1.21.4
 
-require (
-	github.com/codefly-dev/core v0.0.27
-	github.com/pkg/errors v0.9.1
-)
+require github.com/codefly-dev/core v0.0.28
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161 // indirect
@@ -65,6 +62,7 @@ require (
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.0-rc5 // indirect
 	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b // indirect
 	github.com/rivo/uniseg v0.4.4 // indirect
 	github.com/rogpeppe/go-internal v1.11.0 // indirect

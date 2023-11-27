@@ -1,5 +1,0 @@
-endpoints:
- - name: self::grpc
-   override: localhost:9090
- - name: self::rest
-   override: localhost:8080

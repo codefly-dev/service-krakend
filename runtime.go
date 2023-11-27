@@ -2,25 +2,33 @@ package main
 
 import (
 	"context"
-	"github.com/codefly-dev/core/agents/services"
-	agentsv1 "github.com/codefly-dev/core/proto/v1/go/agents"
-	"strings"
-
-	"github.com/codefly-dev/core/agents/helpers/code"
-	golanghelpers "github.com/codefly-dev/core/agents/helpers/go"
+	"github.com/codefly-dev/core/agents/communicate"
+	"github.com/codefly-dev/core/agents/endpoints"
 	"github.com/codefly-dev/core/agents/network"
+	"github.com/codefly-dev/core/agents/services"
+	"github.com/codefly-dev/core/configurations"
+	agentsv1 "github.com/codefly-dev/core/proto/v1/go/agents"
 	servicev1 "github.com/codefly-dev/core/proto/v1/go/services"
 	runtimev1 "github.com/codefly-dev/core/proto/v1/go/services/runtime"
+	"github.com/codefly-dev/core/runners"
 	"github.com/codefly-dev/core/shared"
-	"github.com/pkg/errors"
 )
 
 type Runtime struct {
 	*Service
 
+	Port int
+
 	// internal
-	Runner *golanghelpers.Runner
+	Runner *runners.Runner
 }
+
+type Auth struct {
+	Protected bool `yaml:"protected"`
+}
+
+// RestRoute extends the concept of RestRoute to add Auth aspects
+type RestRoute = configurations.ExtendedRestRoute[Auth]
 
 func NewRuntime() *Runtime {
 	return &Runtime{
@@ -36,12 +44,23 @@ func (p *Runtime) Init(req *servicev1.InitRequest) (*runtimev1.InitResponse, err
 		return p.Base.RuntimeInitResponseError(err)
 	}
 
-	err = p.LoadEndpoints()
+	p.RoutesLocation = p.Local("routing")
+
+	p.Endpoint, err = endpoints.NewRestApi(&configurations.Endpoint{Name: p.Identity.Name, Api: configurations.Rest, Scope: "public"})
 	if err != nil {
 		return p.Base.RuntimeInitResponseError(err)
 	}
 
-	return p.Base.RuntimeInitResponse(p.Endpoints)
+	// From configurations
+	err = p.LoadRoutes()
+	if err != nil {
+		return p.Base.RuntimeInitResponseError(err)
+	}
+	channels, err := p.WithCommunications(services.NewDynamicChannel(communicate.Sync))
+	if err != nil {
+		return p.Base.RuntimeInitResponseError(err)
+	}
+	return p.Base.RuntimeInitResponse(p.Endpoints, channels...)
 }
 
 func (p *Runtime) Configure(req *runtimev1.ConfigureRequest) (*runtimev1.ConfigureResponse, error) {
@@ -49,63 +68,58 @@ func (p *Runtime) Configure(req *runtimev1.ConfigureRequest) (*runtimev1.Configu
 
 	nets, err := p.Network()
 	if err != nil {
-		return nil, errors.Wrapf(err, "cannot create default endpoint")
-	}
-
-	envs, err := network.ConvertToEnvironmentVariables(nets)
-	if err != nil {
-		return nil, p.Wrapf(err, "cannot convert network mappings to environment variables")
-	}
-
-	p.Runner = &golanghelpers.Runner{
-		Dir:           p.Location,
-		Args:          []string{"main.go"},
-		ServiceLogger: p.ServiceLogger,
-		AgentLogger:   p.AgentLogger,
-		Envs:          envs,
-		Debug:         p.Settings.Debug,
-	}
-
-	p.ServiceLogger.Info("watching code changes")
-
-	err = p.Runner.Init(context.Background())
-	if err != nil {
-		p.ServiceLogger.Info("-> Cannot init: %v", err)
 		return &runtimev1.ConfigureResponse{Status: services.ConfigureError(err)}, nil
 	}
 
-	return &runtimev1.ConfigureResponse{
-		Status:          services.ConfigureSuccess(),
-		NetworkMappings: nets,
-	}, nil
+	return &runtimev1.ConfigureResponse{Status: services.ConfigureSuccess(),
+		NetworkMappings: nets}, nil
 }
 
 func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, error) {
 	defer p.AgentLogger.Catch()
 
-	ctx := context.Background()
+	p.DebugMe("%s: network mapping: #%d", p.Identity.Name, len(req.NetworkMappings))
+	p.DebugMe("%s: routing", p.Routes)
 
-	p.AgentLogger.Debugf("network mapping: %v", req.NetworkMappings)
-
-	envs, err := network.ConvertToEnvironmentVariables(req.NetworkMappings)
+	err := p.writeConfig(req.NetworkMappings)
 	if err != nil {
-		return nil, p.Wrapf(err, "cannot convert network mappings to environment variables")
-	}
-	p.Runner.Envs = append(p.Runner.Envs, envs...)
-	p.Runner.Envs = append(p.Runner.Envs, "CODEFLY_SDK__LOGLEVEL", "debug")
-
-	if p.Settings.Watch {
-		conf := services.NewWatchConfiguration([]string{".", "adapters"}, "service.codefly.yaml")
-		err := p.SetupWatcher(conf, p.EventHandler)
-		if err != nil {
-			p.AgentLogger.Warn("error in watcher")
-		}
+		p.DebugMe("cannot write config: %v", err)
+		return nil, p.Wrapf(err, "cannot write config")
 	}
 
-	tracker, err := p.Runner.Run(ctx)
+	envs := []string{
+		"FC_ENABLE=1",
+		"FC_OUT=" + p.Local("out.json"),
+		"FC_SETTINGS=" + p.Local("config/settings"),
+	}
+
+	p.Runner = &runners.Runner{
+		Name:          p.Base.Identity.Name,
+		Bin:           "krakend",
+		Args:          []string{"run", "-d", "--config", p.Local("config/krakend.tmpl")},
+		Envs:          envs,
+		Dir:           p.Location,
+		Debug:         true,
+		ServiceLogger: p.ServiceLogger,
+		AgentLogger:   p.AgentLogger,
+	}
+
+	err = p.Runner.Init(context.Background())
 	if err != nil {
-		return nil, errors.Wrapf(err, "cannot run go")
+		p.DebugMe("runner init failed %v", err)
+		return &runtimev1.StartResponse{
+			Status: services.StartError(err),
+		}, nil
 	}
+	// useful for debugging -- while I fix the error handling with Start
+	tracker, err := p.Runner.Run(context.Background())
+	if err != nil {
+		p.DebugMe("runner failed %v", err)
+		return &runtimev1.StartResponse{
+			Status: services.StartError(err),
+		}, nil
+	}
+	p.DebugMe("after run")
 
 	return &runtimev1.StartResponse{
 		Status:   services.StartSuccess(),
@@ -141,40 +155,23 @@ func (p *Runtime) Communicate(req *agentsv1.Engage) (*agentsv1.InformationReques
 
  */
 
-func (p *Runtime) EventHandler(event code.Change) error {
-	p.AgentLogger.Debugf("got an event: %v", event)
-	if strings.Contains(event.Path, "proto") {
-		p.WantSync()
-	} else {
-		p.WantRestart()
-	}
-	err := p.Runner.Init(context.Background())
-	if err != nil {
-		p.ServiceLogger.Info("Detected code changes: still cannot restart: %v", err)
-		return err
-	}
-	p.ServiceLogger.Info("Detected code changes: restarting")
-	return nil
-}
-
 func (p *Runtime) Network() ([]*runtimev1.NetworkMapping, error) {
-	pm, err := network.NewServicePortManager(p.Context(), p.Identity, p.Endpoints...)
+	p.DebugMe("in network")
+	pm, err := network.NewServicePortManager(p.Context(), p.Identity)
 	if err != nil {
-		return nil, shared.Wrapf(err, "cannot create default endpoint")
+		return nil, p.Wrapf(err, "cannot create network manager")
 	}
-	err = pm.Expose(p.GrpcEndpoint)
+	err = pm.Expose(p.Endpoint)
 	if err != nil {
-		return nil, shared.Wrapf(err, "cannot add grpc endpoint to network manager")
-	}
-	if p.RestEndpoint != nil {
-		err = pm.Expose(p.RestEndpoint)
-		if err != nil {
-			return nil, shared.Wrapf(err, "cannot add rest to network manager")
-		}
+		return nil, p.Wrapf(err, "cannot add grpc endpoint to network manager")
 	}
 	err = pm.Reserve()
 	if err != nil {
-		return nil, shared.Wrapf(err, "cannot reserve ports")
+		return nil, p.Wrapf(err, "cannot reserve ports")
+	}
+	p.Port, err = pm.Port(p.Endpoint)
+	if err != nil {
+		return nil, p.Wrapf(err, "cannot get port")
 	}
 	return pm.NetworkMapping()
 }
