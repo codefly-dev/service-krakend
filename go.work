@@ -2,9 +2,8 @@ go 1.21.4
 
 use (
 	.
-	../../../../codefly.dev/cli
 	../../../../codefly.dev/core
 	base
 )
 
-replace github.com/codefly-dev/core v0.0.19 => ../../../../codefly.dev/core
+replace github.com/codefly-dev/core v0.0.25 => ../../../../codefly.dev/core

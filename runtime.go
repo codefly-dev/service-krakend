@@ -2,15 +2,15 @@ package main
 
 import (
 	"context"
+	"github.com/codefly-dev/core/agents/services"
+	agentsv1 "github.com/codefly-dev/core/proto/v1/go/agents"
 	"strings"
 
-	"github.com/codefly-dev/cli/pkg/plugins/helpers/code"
-	golanghelpers "github.com/codefly-dev/cli/pkg/plugins/helpers/go"
-	"github.com/codefly-dev/cli/pkg/plugins/network"
-	"github.com/codefly-dev/cli/pkg/plugins/services"
-	corev1 "github.com/codefly-dev/cli/proto/v1/core"
-	v1 "github.com/codefly-dev/cli/proto/v1/services"
-	runtimev1 "github.com/codefly-dev/cli/proto/v1/services/runtime"
+	"github.com/codefly-dev/core/agents/helpers/code"
+	golanghelpers "github.com/codefly-dev/core/agents/helpers/go"
+	"github.com/codefly-dev/core/agents/network"
+	servicev1 "github.com/codefly-dev/core/proto/v1/go/services"
+	runtimev1 "github.com/codefly-dev/core/proto/v1/go/services/runtime"
 	"github.com/codefly-dev/core/shared"
 	"github.com/pkg/errors"
 )
@@ -28,8 +28,8 @@ func NewRuntime() *Runtime {
 	}
 }
 
-func (p *Runtime) Init(req *v1.InitRequest) (*runtimev1.InitResponse, error) {
-	defer p.PluginLogger.Catch()
+func (p *Runtime) Init(req *servicev1.InitRequest) (*runtimev1.InitResponse, error) {
+	defer p.AgentLogger.Catch()
 
 	err := p.Base.Init(req, p.Settings)
 	if err != nil {
@@ -45,7 +45,7 @@ func (p *Runtime) Init(req *v1.InitRequest) (*runtimev1.InitResponse, error) {
 }
 
 func (p *Runtime) Configure(req *runtimev1.ConfigureRequest) (*runtimev1.ConfigureResponse, error) {
-	defer p.PluginLogger.Catch()
+	defer p.AgentLogger.Catch()
 
 	nets, err := p.Network()
 	if err != nil {
@@ -61,7 +61,7 @@ func (p *Runtime) Configure(req *runtimev1.ConfigureRequest) (*runtimev1.Configu
 		Dir:           p.Location,
 		Args:          []string{"main.go"},
 		ServiceLogger: p.ServiceLogger,
-		PluginLogger:  p.PluginLogger,
+		AgentLogger:   p.AgentLogger,
 		Envs:          envs,
 		Debug:         p.Settings.Debug,
 	}
@@ -81,11 +81,11 @@ func (p *Runtime) Configure(req *runtimev1.ConfigureRequest) (*runtimev1.Configu
 }
 
 func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, error) {
-	defer p.PluginLogger.Catch()
+	defer p.AgentLogger.Catch()
 
 	ctx := context.Background()
 
-	p.PluginLogger.Debugf("network mapping: %v", req.NetworkMappings)
+	p.AgentLogger.Debugf("network mapping: %v", req.NetworkMappings)
 
 	envs, err := network.ConvertToEnvironmentVariables(req.NetworkMappings)
 	if err != nil {
@@ -98,7 +98,7 @@ func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, 
 		conf := services.NewWatchConfiguration([]string{".", "adapters"}, "service.codefly.yaml")
 		err := p.SetupWatcher(conf, p.EventHandler)
 		if err != nil {
-			p.PluginLogger.Warn("error in watcher")
+			p.AgentLogger.Warn("error in watcher")
 		}
 	}
 
@@ -118,9 +118,9 @@ func (p *Runtime) Information(req *runtimev1.InformationRequest) (*runtimev1.Inf
 }
 
 func (p *Runtime) Stop(req *runtimev1.StopRequest) (*runtimev1.StopResponse, error) {
-	defer p.PluginLogger.Catch()
+	defer p.AgentLogger.Catch()
 
-	p.PluginLogger.Debugf("stopping service")
+	p.AgentLogger.Debugf("stopping service")
 	err := p.Runner.Kill()
 	if err != nil {
 		return nil, shared.Wrapf(err, "cannot kill go")
@@ -133,7 +133,7 @@ func (p *Runtime) Stop(req *runtimev1.StopRequest) (*runtimev1.StopResponse, err
 	return &runtimev1.StopResponse{}, nil
 }
 
-func (p *Runtime) Communicate(req *corev1.Engage) (*corev1.InformationRequest, error) {
+func (p *Runtime) Communicate(req *agentsv1.Engage) (*agentsv1.InformationRequest, error) {
 	return p.Base.Communicate(req)
 }
 
@@ -142,7 +142,7 @@ func (p *Runtime) Communicate(req *corev1.Engage) (*corev1.InformationRequest, e
  */
 
 func (p *Runtime) EventHandler(event code.Change) error {
-	p.PluginLogger.Debugf("got an event: %v", event)
+	p.AgentLogger.Debugf("got an event: %v", event)
 	if strings.Contains(event.Path, "proto") {
 		p.WantSync()
 	} else {

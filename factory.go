@@ -1,25 +1,20 @@
 package main
 
 import (
-	"bytes"
 	"embed"
 	"fmt"
-	"github.com/codefly-dev/cli/pkg/plugins/communicate"
-	"github.com/codefly-dev/cli/pkg/plugins/endpoints"
-	corev1 "github.com/codefly-dev/cli/proto/v1/core"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
-	"os"
-	"strings"
-	"unicode"
-
-	dockerhelpers "github.com/codefly-dev/cli/pkg/plugins/helpers/docker"
-	golanghelpers "github.com/codefly-dev/cli/pkg/plugins/helpers/go"
-	"github.com/codefly-dev/cli/pkg/plugins/services"
-	v1 "github.com/codefly-dev/cli/proto/v1/services"
-	factoryv1 "github.com/codefly-dev/cli/proto/v1/services/factory"
+	"github.com/codefly-dev/core/agents/communicate"
+	"github.com/codefly-dev/core/agents/endpoints"
+	dockerhelpers "github.com/codefly-dev/core/agents/helpers/docker"
+	golanghelpers "github.com/codefly-dev/core/agents/helpers/go"
+	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
+	agentsv1 "github.com/codefly-dev/core/proto/v1/go/agents"
+	servicev1 "github.com/codefly-dev/core/proto/v1/go/services"
+	factoryv1 "github.com/codefly-dev/core/proto/v1/go/services/factory"
 	"github.com/codefly-dev/core/shared"
+	"github.com/codefly-dev/core/templates"
+	"os"
 )
 
 type Factory struct {
@@ -35,24 +30,8 @@ func NewFactory() *Factory {
 	}
 }
 
-type Proto struct {
-	Package      string
-	PackageAlias string
-}
-
-type CreateService struct {
-	Name      string
-	TitleName string
-	Proto     Proto
-	Go        GenerateInstructions
-}
-
-type GenerateInstructions struct {
-	Package string
-}
-
-func (p *Factory) Init(req *v1.InitRequest) (*factoryv1.InitResponse, error) {
-	defer p.PluginLogger.Catch()
+func (p *Factory) Init(req *servicev1.InitRequest) (*factoryv1.InitResponse, error) {
+	defer p.AgentLogger.Catch()
 
 	err := p.Base.Init(req, p.Settings)
 	if err != nil {
@@ -61,10 +40,15 @@ func (p *Factory) Init(req *v1.InitRequest) (*factoryv1.InitResponse, error) {
 
 	err = p.LoadEndpoints()
 	if err != nil {
-		return nil, err
+		return p.FactoryInitResponseError(err)
 	}
 
 	channels, err := p.WithCommunications(services.NewDynamicChannel(communicate.Create))
+	if err != nil {
+		return nil, err
+	}
+
+	readme, err := templates.ApplyTemplateFrom(shared.Embed(factory), "templates/factory/README.md", p.Information)
 	if err != nil {
 		return nil, err
 	}
@@ -73,42 +57,19 @@ func (p *Factory) Init(req *v1.InitRequest) (*factoryv1.InitResponse, error) {
 		Version:   p.Version(),
 		Endpoints: p.Endpoints,
 		Channels:  channels,
+		ReadMe:    readme,
 	}, nil
 }
 
 const Watch = "watch"
 const WithRest = "with_rest"
-const WithKreya = "with_kreya"
-const WithPostman = "with_postman"
-
-func (p *Factory) Welcome() (*corev1.Message, map[string]string) {
-	return &corev1.Message{Message: `Welcome to the service plugin #(bold,cyan)[go-grc] by plugin #(bold,cyan)[codefly.ai]
-Some of the things this plugin provides for you:
- #(bold,cyan)[Developer Experience]
-- hot-reload
-- code generation automated
-- Kreya configuration (optional)
-- Postman configuration (coming soon)
- #(bold,cyan)[Code]
-- gRPC server
-- REST server auto-generated (optional)
-- Version endpoint
-#(bold,cyan)[Production ready]
-- docker build
-- Kubernetes deployment
-`}, map[string]string{
-			"PluginName":      plugin.Identifier,
-			"PluginPublisher": plugin.Publisher,
-		}
-}
 
 func (p *Factory) NewCreateCommunicate() (*communicate.ClientContext, error) {
 	client, err := communicate.NewClientContext(p.Context(), communicate.Create)
 	p.createSequence, err = client.NewSequence(
-		client.Display(p.Welcome()),
-		client.NewConfirm(&corev1.Message{Name: Watch, Message: "Code hot-reload (Recommended)?", Description: "codefly can restart your service when code changes are detected 🔎"}, true),
-		client.NewConfirm(&corev1.Message{Name: WithRest, Message: "Automatic REST generation (Recommended)?", Description: "codefly can generate a REST server that stays magically 🪄 synced to your gRPC definition -- the easiest way to do REST"}, true),
-		client.NewConfirm(&corev1.Message{Name: WithRest, Message: "Kreya configuration?", Description: "codefly can create a Kreya configuration to make it easy to call your endpoints, because why would you want to do that manually? 😵‍💫"}, true),
+		client.NewConfirm(&agentsv1.Message{Name: Watch, Message: "Code hot-reload (Recommended)?", Description: "codefly can restart your service when code changes are detected 🔎"}, true),
+		client.NewConfirm(&agentsv1.Message{Name: WithRest, Message: "Automatic REST generation (Recommended)?", Description: "codefly can generate a REST server that stays magically 🪄 synced to your gRPC definition -- the easiest way to do REST"}, true),
+		client.NewConfirm(&agentsv1.Message{Name: WithRest, Message: "Kreya configuration?", Description: "codefly can create a Kreya configuration to make it easy to call your endpoints, because why would you want to do that manually? 😵‍💫"}, true),
 	)
 	if err != nil {
 		return nil, err
@@ -120,124 +81,27 @@ type Deployment struct {
 	Replicas int
 }
 
-type DockerImage struct {
-	Repository string
-	Name       string
-	Tag        string
-}
-
-type Case struct {
-	LowerCase string
-	SnakeCase string
-	CamelCase string
-	KebabCase string
-	Title     string
-	DnsCase   string
-}
-
-type ServiceWithCase struct {
-	Name      Case
-	Unique    Case
-	Domain    string
-	Namespace string
-}
-
-// toSnakeCase converts a string to snake_case
-func toSnakeCase(s string) string {
-	var buf bytes.Buffer
-	for i, r := range s {
-		if unicode.IsUpper(r) {
-			if i > 0 {
-				buf.WriteRune('_')
-			}
-			buf.WriteRune(unicode.ToLower(r))
-		} else {
-			buf.WriteRune(r)
-		}
-	}
-	return buf.String()
-}
-
-// toCamelCase converts a string to camelCase
-func toCamelCase(s string) string {
-	var buf bytes.Buffer
-	toUpper := false
-	for _, r := range s {
-		if r == '_' || r == '-' {
-			toUpper = true
-			continue
-		}
-		if toUpper {
-			buf.WriteRune(unicode.ToUpper(r))
-			toUpper = false
-		} else {
-			buf.WriteRune(r)
-		}
-	}
-	return buf.String()
-}
-
-// toKebabCase converts a string to kebab-case
-func toKebabCase(str string) string {
-	return strings.ReplaceAll(toSnakeCase(str), "_", "-")
-}
-
-func toDnsCase(s string) string {
-	return strings.ReplaceAll(toLowerCase(s), "/", "-")
-}
-
-func toCase(s string) Case {
-	return Case{
-		LowerCase: toLowerCase(s),
-		DnsCase:   toDnsCase(s),
-		SnakeCase: toSnakeCase(s),
-		CamelCase: toCamelCase(s),
-		KebabCase: toKebabCase(s),
-		Title:     cases.Title(language.English).String(s),
-	}
-}
-
-func toLowerCase(s string) string {
-	return strings.ToLower(s)
-}
-
-func ToServiceWithCase(svc *configurations.Service) ServiceWithCase {
-	return ServiceWithCase{
-		Name:      toCase(svc.Name),
-		Unique:    toCase(svc.Unique()),
-		Domain:    svc.Domain,
-		Namespace: svc.Namespace,
-	}
-}
-
-type Readme struct {
-	Summary string
-}
-
 type CreateConfiguration struct {
-	Service    ServiceWithCase
-	Plugin     *configurations.Plugin
-	Image      DockerImage
-	Readme     Readme
+	Image      *configurations.DockerImage
 	Deployment Deployment
 	Domain     string
 	Envs       []string
 }
 
 func (p *Factory) Create(req *factoryv1.CreateRequest) (*factoryv1.CreateResponse, error) {
-	defer p.PluginLogger.Catch()
+	defer p.AgentLogger.Catch()
 
 	if p.create == nil {
 		// Initial setup
 		var err error
-		p.PluginLogger.DebugMe("Setup communication")
+		p.AgentLogger.DebugMe("Setup communication")
 		p.create, err = p.NewCreateCommunicate()
 		if err != nil {
-			return nil, p.PluginLogger.Wrapf(err, "cannot setup up communication")
+			return nil, p.AgentLogger.Wrapf(err, "cannot setup up communication")
 		}
 		err = p.Wire(communicate.Create, p.create)
 		if err != nil {
-			return nil, p.PluginLogger.Wrapf(err, "cannot wire communication")
+			return nil, p.AgentLogger.Wrapf(err, "cannot wire communication")
 		}
 		return &factoryv1.CreateResponse{NeedCommunication: true}, nil
 	}
@@ -245,23 +109,14 @@ func (p *Factory) Create(req *factoryv1.CreateRequest) (*factoryv1.CreateRespons
 	// Make sure the communication for create has been done successfully
 	if !p.create.Ready() {
 		p.DebugMe("create not ready!")
-		return nil, p.PluginLogger.Errorf("create: communication not ready")
+		return nil, p.AgentLogger.Errorf("create: communication not ready")
 	}
 
 	p.Settings.Watch = p.create.Confirm(p.createSequence.Find(Watch)).Confirmed
 	p.Settings.CreateHttpEndpoint = p.create.Confirm(p.createSequence.Find(WithRest)).Confirmed
 
-	create := CreateConfiguration{
-		Service:    ToServiceWithCase(p.Configuration),
-		Domain:     p.Identity.Domain,
-		Plugin:     p.Plugin,
-		Image:      DockerImage{},
-		Deployment: Deployment{},
-		Readme:     Readme{Summary: p.Identity.Name},
-	}
-
 	ignores := []string{"go.work", "service.generation.codefly.yaml"}
-	err := p.Templates(create, services.WithFactory(factory, ignores...),
+	err := p.Templates(p.Information, services.WithFactory(factory, ignores...),
 		services.WithBuilder(builder),
 		services.WithDeploymentFor(deployment, "kustomize/base"))
 	if err != nil {
@@ -272,7 +127,7 @@ func (p *Factory) Create(req *factoryv1.CreateRequest) (*factoryv1.CreateRespons
 	if err != nil {
 		return nil, err
 	}
-	p.PluginLogger.Info("tree: %s", out)
+	p.AgentLogger.Info("tree: %s", out)
 	p.ServiceLogger.Info("We generated this code for you:\n%s", out)
 
 	err = p.CreateEndpoints()
@@ -282,11 +137,11 @@ func (p *Factory) Create(req *factoryv1.CreateRequest) (*factoryv1.CreateRespons
 
 	helper := golanghelpers.Go{Dir: p.Location}
 
-	err = helper.BufGenerate(p.PluginLogger)
+	err = helper.BufGenerate(p.AgentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("factory>create: go helper: cannot run buf generate: %v", err)
 	}
-	err = helper.ModTidy(p.PluginLogger)
+	err = helper.ModTidy(p.AgentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("factory>create: go helper: cannot run mod tidy: %v", err)
 	}
@@ -295,7 +150,7 @@ func (p *Factory) Create(req *factoryv1.CreateRequest) (*factoryv1.CreateRespons
 }
 
 func (p *Factory) Update(req *factoryv1.UpdateRequest) (*factoryv1.UpdateResponse, error) {
-	defer p.PluginLogger.Catch()
+	defer p.AgentLogger.Catch()
 
 	p.ServiceLogger.Info("Updating")
 
@@ -305,7 +160,7 @@ func (p *Factory) Update(req *factoryv1.UpdateRequest) (*factoryv1.UpdateRespons
 	}
 
 	helper := golanghelpers.Go{Dir: p.Location}
-	err = helper.Update(p.PluginLogger)
+	err = helper.Update(p.AgentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("factory>update: go helper: cannot run update: %v", err)
 	}
@@ -313,28 +168,28 @@ func (p *Factory) Update(req *factoryv1.UpdateRequest) (*factoryv1.UpdateRespons
 }
 
 func (p *Factory) Sync(req *factoryv1.SyncRequest) (*factoryv1.SyncResponse, error) {
-	defer p.PluginLogger.Catch()
+	defer p.AgentLogger.Catch()
 
-	p.PluginLogger.TODO("Some caching please!")
-	//
-	//p.PluginLogger.Debugf("running sync: %v", p.Location)
-	//helper := golanghelpers.Go{Dir: p.Location}
-	//
-	//// Clean-up the generated code
-	//p.PluginLogger.TODO("get location of generated code from buf")
-	//err := os.RemoveAll(p.Local("adapters/v1"))
-	//if err != nil {
-	//	return nil, p.Wrapf(err, "cannot remove adapters")
-	//}
-	//// Re-generate
-	//err = helper.BufGenerate(p.PluginLogger)
-	//if err != nil {
-	//	return nil, p.Wrapf(err, "cannot generate proto")
-	//}
-	//err = helper.ModTidy(p.PluginLogger)
-	//if err != nil {
-	//	return nil, p.Wrapf(err, "cannot tidy go.mod")
-	//}
+	p.AgentLogger.TODO("Some caching please!")
+
+	p.AgentLogger.Debugf("running sync: %v", p.Location)
+	helper := golanghelpers.Go{Dir: p.Location}
+
+	// Clean-up the generated code
+	p.AgentLogger.TODO("get location of generated code from buf")
+	err := os.RemoveAll(p.Local("adapters/servicev1"))
+	if err != nil {
+		return nil, p.Wrapf(err, "cannot remove adapters")
+	}
+	// Re-generate
+	err = helper.BufGenerate(p.AgentLogger)
+	if err != nil {
+		return nil, p.Wrapf(err, "cannot generate proto")
+	}
+	err = helper.ModTidy(p.AgentLogger)
+	if err != nil {
+		return nil, p.Wrapf(err, "cannot tidy go.mod")
+	}
 
 	return &factoryv1.SyncResponse{}, nil
 }
@@ -349,7 +204,7 @@ type DockerTemplating struct {
 }
 
 func (p *Factory) Build(req *factoryv1.BuildRequest) (*factoryv1.BuildResponse, error) {
-	p.PluginLogger.Debugf("building docker image")
+	p.AgentLogger.Debugf("building docker image")
 	docker := DockerTemplating{}
 
 	e, err := endpoints.FromProtoEndpoint(p.GrpcEndpoint)
@@ -384,7 +239,7 @@ func (p *Factory) Build(req *factoryv1.BuildRequest) (*factoryv1.BuildResponse, 
 	if err != nil {
 		return nil, p.Wrapf(err, "cannot create builder")
 	}
-	builder.WithLogger(p.PluginLogger)
+	builder.WithLogger(p.AgentLogger)
 	_, err = builder.Build()
 	if err != nil {
 		return nil, p.Wrapf(err, "cannot build image")
