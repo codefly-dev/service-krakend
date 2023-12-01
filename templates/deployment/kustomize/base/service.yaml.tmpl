@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Service.Unique.DnsCase }}
+spec:
+  selector:
+    app: {{ .Service.Unique.DnsCase}}
+  ports:
+    - protocol: TCP
+      name: http-port
+      port: 8080
+      targetPort: 8080
+    - protocol: TCP
+      name: grpc-port
+      port: 9090
+      targetPort: 9090

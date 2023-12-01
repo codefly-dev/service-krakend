@@ -21,6 +21,8 @@ type Settings struct {
 type Service struct {
 	*services.Base
 
+	// Access
+	Port     int
 	Endpoint *basev1.Endpoint
 
 	Routes         []*RestRoute

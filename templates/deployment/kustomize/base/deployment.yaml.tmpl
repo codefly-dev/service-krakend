@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Service.Unique.DnsCase }}
+spec:
+  replicas: {{ .Deployment.Replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Service.Unique.DnsCase }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Service.Unique.DnsCase }}
+    spec:
+      containers:
+        - name: {{ .Service.Unique.DnsCase }}
+          image: image:tag

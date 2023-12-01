@@ -80,11 +80,24 @@ func gatewayTarget(r *configurations.RestRoute) string {
 	return fmt.Sprintf("/%s/%s%s", r.Application, r.Service, r.Path)
 }
 
-func (p *Runtime) writeConfig(nms []*runtimev1.NetworkMapping) error {
+func (p *Service) writeConfig(nms []*runtimev1.NetworkMapping) error {
+	config, err := p.createConfig(nms)
+	if err != nil {
+		return p.Wrapf(err, "cannot create config")
+	}
+	target := p.Local("config/settings/routing.json")
+	err = os.WriteFile(target, config, 0o644)
+	if err != nil {
+		return p.Wrapf(err, "cannot write settings to %s", target)
+	}
+	return nil
+}
+
+func (p *Service) createConfig(nms []*runtimev1.NetworkMapping) ([]byte, error) {
 	// Write the main config
 	err := shared.Embed(config).Copy("templates/krakend.config", p.Local("config/krakend.tmpl"))
 	if err != nil {
-		return p.Wrapf(err, "cannot copy config")
+		return nil, p.Wrapf(err, "cannot copy config")
 	}
 
 	p.DebugMe("write config with known routes: %v", p.Routes)
@@ -95,7 +108,7 @@ func (p *Runtime) writeConfig(nms []*runtimev1.NetworkMapping) error {
 	for _, route := range p.Routes {
 		nm, err := services.NetworkMappingForRoute(p.Context(), &route.RestRoute, nms)
 		if err != nil {
-			return p.Wrapf(err, "cannot get network mapping for route")
+			return nil, p.Wrapf(err, "cannot get network mapping for route")
 		}
 		var hosts []string
 		for _, h := range nm.Addresses {
@@ -114,16 +127,12 @@ func (p *Runtime) writeConfig(nms []*runtimev1.NetworkMapping) error {
 		settings.Group = append(settings.Group, fwd)
 		break
 	}
-	target := p.Local("config/settings/routing.json")
+
 	content, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		return p.Wrapf(err, "cannot marshal settings")
+		return nil, p.Wrapf(err, "cannot marshal settings")
 	}
-	err = os.WriteFile(target, content, 0o644)
-	if err != nil {
-		return p.Wrapf(err, "cannot write settings to %s", target)
-	}
-	return nil
+	return content, nil
 }
 
 //go:embed templates/krakend.config

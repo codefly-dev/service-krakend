@@ -17,8 +17,6 @@ import (
 type Runtime struct {
 	*Service
 
-	Port int
-
 	// internal
 	Runner *runners.Runner
 }
@@ -96,7 +94,7 @@ func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, 
 	p.Runner = &runners.Runner{
 		Name:          p.Base.Identity.Name,
 		Bin:           "krakend",
-		Args:          []string{"run", "-d", "--config", p.Local("config/krakend.tmpl")},
+		Args:          []string{"run", "-d", "-c", p.Local("config/krakend.tmpl")},
 		Envs:          envs,
 		Dir:           p.Location,
 		Debug:         true,
