@@ -25,6 +25,8 @@ github.com/codefly-dev/core v0.0.31 h1:gg+Ircc18RG4vWMCl9YlxAhdPln19J/lJrRfKDrat
 github.com/codefly-dev/core v0.0.31/go.mod h1:Bf8QqiLPdjNVZDVWqQPsxowyF1SyNL4UKFSYBTVUxlg=
 github.com/codefly-dev/core v0.0.35 h1:Ln334n1J1XJQdarF9XjrhwaL4sbvklOyNDMeZnTeupo=
 github.com/codefly-dev/core v0.0.35/go.mod h1:uSbrLX6gKX8ngjrheT7v6+AcvlRmTC+itEIoH7Ngpwc=
+github.com/codefly-dev/core v0.0.39 h1:1a8kuTY7jciYtcJ96KMJkaDcKsBx5AU6IUxwereBqvk=
+github.com/codefly-dev/core v0.0.39/go.mod h1:uSbrLX6gKX8ngjrheT7v6+AcvlRmTC+itEIoH7Ngpwc=
 github.com/codefly-dev/golor v0.0.10 h1:eqNxY3aSVbXDWo+3S9fcRynCEStPNo033owzwvzziOQ=
 github.com/codefly-dev/golor v0.0.10/go.mod h1:TzMkdNwKUDO9PKz9f2LzMPOMHYGFXQEluOj8wEP2q1g=
 github.com/containerd/console v1.0.4-0.20230313162750-1ae8d489ac81 h1:q2hJAaP1k2wIvVRd/hEHD7lacgqrCPS+k8g1MndzfWY=

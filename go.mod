@@ -2,7 +2,7 @@ module github.com/codefly-dev/go-grpc
 
 go 1.21.4
 
-require github.com/codefly-dev/core v0.0.35
+require github.com/codefly-dev/core v0.0.39
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161 // indirect
