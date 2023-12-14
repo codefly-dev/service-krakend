@@ -2,14 +2,13 @@ package main
 
 import (
 	"context"
-	"github.com/codefly-dev/core/agents/communicate"
 	"github.com/codefly-dev/core/agents/endpoints"
 	"github.com/codefly-dev/core/agents/network"
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
-	agentsv1 "github.com/codefly-dev/core/proto/v1/go/agents"
-	servicev1 "github.com/codefly-dev/core/proto/v1/go/services"
-	runtimev1 "github.com/codefly-dev/core/proto/v1/go/services/runtime"
+	agentsv1 "github.com/codefly-dev/core/generated/v1/go/proto/agents"
+	servicev1 "github.com/codefly-dev/core/generated/v1/go/proto/services"
+	runtimev1 "github.com/codefly-dev/core/generated/v1/go/proto/services/runtime"
 	"github.com/codefly-dev/core/runners"
 	"github.com/codefly-dev/core/shared"
 )
@@ -34,7 +33,7 @@ func NewRuntime() *Runtime {
 	}
 }
 
-func (p *Runtime) Init(req *servicev1.InitRequest) (*runtimev1.InitResponse, error) {
+func (p *Runtime) Init(ctx context.Context, req *servicev1.InitRequest) (*runtimev1.InitResponse, error) {
 	defer p.AgentLogger.Catch()
 
 	err := p.Base.Init(req, p.Settings)
@@ -44,7 +43,7 @@ func (p *Runtime) Init(req *servicev1.InitRequest) (*runtimev1.InitResponse, err
 
 	p.RoutesLocation = p.Local("routing")
 
-	p.Endpoint, err = endpoints.NewRestApi(&configurations.Endpoint{Name: p.Identity.Name, Api: configurations.Rest, Scope: "public"})
+	p.Endpoint, err = endpoints.NewRestAPI(&configurations.Endpoint{Name: p.Identity.Name, API: configurations.Rest, Visibility: "public"})
 	if err != nil {
 		return p.Base.RuntimeInitResponseError(err)
 	}
@@ -54,14 +53,14 @@ func (p *Runtime) Init(req *servicev1.InitRequest) (*runtimev1.InitResponse, err
 	if err != nil {
 		return p.Base.RuntimeInitResponseError(err)
 	}
-	channels, err := p.WithCommunications(services.NewDynamicChannel(communicate.Sync))
-	if err != nil {
-		return p.Base.RuntimeInitResponseError(err)
-	}
-	return p.Base.RuntimeInitResponse(p.Endpoints, channels...)
+	//channels, err := p.WithCommunications(services.NewDynamicChannel(communicate.Sync))
+	//if err != nil {
+	//	return p.Base.RuntimeInitResponseError(err)
+	//}
+	return p.Base.RuntimeInitResponse(p.Endpoints)
 }
 
-func (p *Runtime) Configure(req *runtimev1.ConfigureRequest) (*runtimev1.ConfigureResponse, error) {
+func (p *Runtime) Configure(ctx context.Context, req *runtimev1.ConfigureRequest) (*runtimev1.ConfigureResponse, error) {
 	defer p.AgentLogger.Catch()
 
 	nets, err := p.Network()
@@ -73,7 +72,7 @@ func (p *Runtime) Configure(req *runtimev1.ConfigureRequest) (*runtimev1.Configu
 		NetworkMappings: nets}, nil
 }
 
-func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, error) {
+func (p *Runtime) Start(ctx context.Context, req *runtimev1.StartRequest) (*runtimev1.StartResponse, error) {
 	defer p.AgentLogger.Catch()
 
 	p.DebugMe("%s: network mapping: #%d", p.Identity.Name, len(req.NetworkMappings))
@@ -125,11 +124,11 @@ func (p *Runtime) Start(req *runtimev1.StartRequest) (*runtimev1.StartResponse, 
 	}, nil
 }
 
-func (p *Runtime) Information(req *runtimev1.InformationRequest) (*runtimev1.InformationResponse, error) {
+func (p *Runtime) Information(ctx context.Context, req *runtimev1.InformationRequest) (*runtimev1.InformationResponse, error) {
 	return &runtimev1.InformationResponse{}, nil
 }
 
-func (p *Runtime) Stop(req *runtimev1.StopRequest) (*runtimev1.StopResponse, error) {
+func (p *Runtime) Stop(ctx context.Context, req *runtimev1.StopRequest) (*runtimev1.StopResponse, error) {
 	defer p.AgentLogger.Catch()
 
 	p.AgentLogger.Debugf("stopping service")
@@ -145,8 +144,8 @@ func (p *Runtime) Stop(req *runtimev1.StopRequest) (*runtimev1.StopResponse, err
 	return &runtimev1.StopResponse{}, nil
 }
 
-func (p *Runtime) Communicate(req *agentsv1.Engage) (*agentsv1.InformationRequest, error) {
-	return p.Base.Communicate(req)
+func (p *Runtime) Communicate(ctx context.Context, req *agentsv1.Engage) (*agentsv1.InformationRequest, error) {
+	return p.Base.Communicate(ctx, req)
 }
 
 /* Details

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"github.com/codefly-dev/core/agents"
 	"github.com/codefly-dev/core/agents/endpoints"
-	basev1 "github.com/codefly-dev/core/proto/v1/go/base"
+	basev1 "github.com/codefly-dev/core/generated/v1/go/proto/base"
+	agentv1 "github.com/codefly-dev/core/generated/v1/go/proto/services/agent"
 	"github.com/codefly-dev/core/shared"
 
 	"github.com/codefly-dev/core/agents/services"
@@ -12,7 +14,7 @@ import (
 )
 
 // Agent version
-var agent = configurations.LoadAgentConfiguration(shared.Embed(info))
+var agent = shared.Must(configurations.LoadFromFs[configurations.Agent](shared.Embed(info)))
 
 type Settings struct {
 	Debug bool `yaml:"debug"` // Developer only
@@ -32,37 +34,47 @@ type Service struct {
 	*Settings
 }
 
+func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv1.AgentInformationRequest) (*agentv1.AgentInformation, error) {
+	return &agentv1.AgentInformation{
+		Capabilities: []*agentv1.Capability{
+			{Type: agentv1.Capability_FACTORY},
+			{Type: agentv1.Capability_RUNTIME},
+		},
+	}, nil
+}
+
 func NewService() *Service {
 	return &Service{
-		Base:     services.NewServiceBase(agent.Of(configurations.AgentService)),
+		Base:     services.NewServiceBase(shared.NewContext(), agent.Of(configurations.ServiceAgent)),
 		Settings: &Settings{},
 	}
 }
 
 // LoadRoutes from routing configuration folder
-func (p *Service) LoadRoutes() error {
+func (s *Service) LoadRoutes() error {
 	var err error
-	p.Routes, err = configurations.LoadApplicationExtendedRoutes[Auth](p.RoutesLocation, p.AgentLogger)
+	s.Routes, err = configurations.LoadApplicationExtendedRoutes[Auth](s.Context(), s.RoutesLocation)
 	if err != nil {
-		return p.Wrapf(err, "cannot load routing")
+		return s.Wrapf(err, "cannot load routing")
 	}
-	p.DebugMe("found #%d routes", len(p.Routes))
+	s.DebugMe("found #%d routes", len(s.Routes))
 	return nil
 }
 
-func (p *Factory) LoadEndpoints() error {
+func (s *Service) LoadEndpoints() error {
 	var err error
-	p.Endpoint, err = endpoints.NewRestApi(&configurations.Endpoint{Name: p.Identity.Name})
+	s.Endpoint, err = endpoints.NewRestAPI(&configurations.Endpoint{Name: s.Identity.Name})
 	if err != nil {
-		return p.Wrapf(err, "cannot  create tcp endpoint")
+		return s.Wrapf(err, "cannot  create tcp endpoint")
 	}
 	return nil
 }
 
 func main() {
 	agents.Register(
-		services.NewFactoryAgent(agent.Of(configurations.AgentFactoryService), NewFactory()),
-		services.NewRuntimeAgent(agent.Of(configurations.AgentRuntimeService), NewRuntime()))
+		services.NewServiceAgent(agent.Of(configurations.ServiceAgent), NewService()),
+		services.NewFactoryAgent(agent.Of(configurations.RuntimeServiceAgent), NewFactory()),
+		services.NewRuntimeAgent(agent.Of(configurations.FactoryServiceAgent), NewRuntime()))
 }
 
 //go:embed agent.codefly.yaml
