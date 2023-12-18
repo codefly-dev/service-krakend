@@ -1,14 +1,16 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
+	"os"
+
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
-	runtimev1 "github.com/codefly-dev/core/generated/v1/go/proto/services/runtime"
+	runtimev1 "github.com/codefly-dev/core/generated/go/services/runtime/v1"
 	"github.com/codefly-dev/core/shared"
-	"os"
 )
 
 // KrakendSettings will contain all the static information
@@ -80,35 +82,35 @@ func gatewayTarget(r *configurations.RestRoute) string {
 	return fmt.Sprintf("/%s/%s%s", r.Application, r.Service, r.Path)
 }
 
-func (p *Service) writeConfig(nms []*runtimev1.NetworkMapping) error {
-	config, err := p.createConfig(nms)
+func (s *Service) writeConfig(ctx context.Context, nms []*runtimev1.NetworkMapping) error {
+	config, err := s.createConfig(ctx, nms)
 	if err != nil {
-		return p.Wrapf(err, "cannot create config")
+		return s.Wrapf(err, "cannot create config")
 	}
-	target := p.Local("config/settings/routing.json")
+	target := s.Local("config/settings/routing.json")
 	err = os.WriteFile(target, config, 0o644)
 	if err != nil {
-		return p.Wrapf(err, "cannot write settings to %s", target)
+		return s.Wrapf(err, "cannot write settings to %s", target)
 	}
 	return nil
 }
 
-func (p *Service) createConfig(nms []*runtimev1.NetworkMapping) ([]byte, error) {
+func (s *Service) createConfig(ctx context.Context, nms []*runtimev1.NetworkMapping) ([]byte, error) {
 	// Write the main config
-	err := shared.Embed(config).Copy("templates/krakend.config", p.Local("config/krakend.tmpl"))
+	err := shared.Embed(config).Copy("templates/krakend.config", s.Local("config/krakend.tmpl"))
 	if err != nil {
-		return nil, p.Wrapf(err, "cannot copy config")
+		return nil, s.Wrapf(err, "cannot copy config")
 	}
 
-	p.DebugMe("write config with known routes: %v", p.Routes)
-	settings := KrakendSettings{Port: p.Port}
+	s.DebugMe("write config with known routes: %v", s.Routes)
+	settings := KrakendSettings{Port: s.Port}
 	// setup CORS configuration globally
 	settings.ExtraConfig = Cors(CorsPolicyKey)
 
-	for _, route := range p.Routes {
-		nm, err := services.NetworkMappingForRoute(p.Context(), &route.RestRoute, nms)
+	for _, route := range s.Routes {
+		nm, err := services.NetworkMappingForRoute(ctx, &route.RestRoute, nms)
 		if err != nil {
-			return nil, p.Wrapf(err, "cannot get network mapping for route")
+			return nil, s.Wrapf(err, "cannot get network mapping for route")
 		}
 		var hosts []string
 		for _, h := range nm.Addresses {
@@ -130,7 +132,7 @@ func (p *Service) createConfig(nms []*runtimev1.NetworkMapping) ([]byte, error) 
 
 	content, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		return nil, p.Wrapf(err, "cannot marshal settings")
+		return nil, s.Wrapf(err, "cannot marshal settings")
 	}
 	return content, nil
 }

@@ -2,7 +2,7 @@ module github.com/codefly-dev/go-grpc
 
 go 1.21.4
 
-require github.com/codefly-dev/core v0.1.0
+require github.com/codefly-dev/core v0.0.54
 
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.31.0-20231115204500-e097f827e652.2 // indirect
@@ -83,7 +83,7 @@ require (
 	github.com/yusufpapurcu/wmi v1.2.3 // indirect
 	go.mongodb.org/mongo-driver v1.13.1 // indirect
 	golang.org/x/crypto v0.16.0 // indirect
-	golang.org/x/exp v0.0.0-20231206192017-f3f8817b8deb // indirect
+	golang.org/x/exp v0.0.0-20231214170342-aacd6d4b4611 // indirect
 	golang.org/x/mod v0.14.0 // indirect
 	golang.org/x/net v0.19.0 // indirect
 	golang.org/x/sync v0.5.0 // indirect

@@ -3,26 +3,25 @@ package main
 import (
 	"context"
 	"embed"
+	"os"
+
 	"github.com/codefly-dev/core/agents/endpoints"
 	dockerhelpers "github.com/codefly-dev/core/agents/helpers/docker"
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
-	agentsv1 "github.com/codefly-dev/core/generated/v1/go/proto/agents"
-	basev1 "github.com/codefly-dev/core/generated/v1/go/proto/base"
-	servicev1 "github.com/codefly-dev/core/generated/v1/go/proto/services"
-	factoryv1 "github.com/codefly-dev/core/generated/v1/go/proto/services/factory"
-	runtimev1 "github.com/codefly-dev/core/generated/v1/go/proto/services/runtime"
+	basev1 "github.com/codefly-dev/core/generated/go/base/v1"
+	agentv1 "github.com/codefly-dev/core/generated/go/services/agent/v1"
+	factoryv1 "github.com/codefly-dev/core/generated/go/services/factory/v1"
+	runtimev1 "github.com/codefly-dev/core/generated/go/services/runtime/v1"
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/templates"
-	"os"
-	"path"
 )
 
 type Factory struct {
 	*Service
 
 	syncRoutes          []*configurations.RestRoute
-	syncRoutesQuestions []*agentsv1.Question
+	syncRoutesQuestions []*agentv1.Question
 }
 
 func NewFactory() *Factory {
@@ -31,136 +30,139 @@ func NewFactory() *Factory {
 	}
 }
 
-func (p *Factory) Init(ctx context.Context, req *servicev1.InitRequest) (*factoryv1.InitResponse, error) {
-	defer p.AgentLogger.Catch()
+func (s *Factory) Init(ctx context.Context, req *factoryv1.InitRequest) (*factoryv1.InitResponse, error) {
+	defer s.Wool.Catch()
+	ctx = s.Provider.WithContext(ctx)
 
-	err := p.Base.Init(req, p.Settings)
+	err := s.Base.Init(ctx, req.Identity, s.Settings)
 	if err != nil {
 		return nil, err
 	}
 
-	p.RoutesLocation = p.Local("routing")
-	err = p.LoadRoutes()
+	s.RoutesLocation = s.Local("routing")
+	err = shared.CheckDirectoryOrCreate(ctx, s.RoutesLocation)
 	if err != nil {
-		return nil, p.Wrapf(err, "cannot load routes")
+		return nil, s.Wrapf(err, "cannot create routes location")
 	}
 
-	err = p.LoadEndpoints()
+	err = s.LoadRoutes(ctx)
 	if err != nil {
-		return p.FactoryInitResponseError(err)
+		return nil, s.Wrapf(err, "cannot load routes")
 	}
 
-	readme, err := templates.ApplyTemplateFrom(shared.Embed(factory), "templates/factory/README.md", p.Information)
+	err = s.LoadEndpoints(ctx)
+	if err != nil {
+		return s.FactoryInitResponseError(err)
+	}
+
+	readme, err := templates.ApplyTemplateFrom(shared.Embed(factory), "templates/factory/README.md", s.Information)
 	if err != nil {
 		return nil, err
 	}
 
-	return p.FactoryInitResponse(p.Endpoints, readme)
+	return s.FactoryInitResponse(s.Endpoints, readme)
 }
 
-func (p *Factory) Create(ctx context.Context, req *factoryv1.CreateRequest) (*factoryv1.CreateResponse, error) {
-	defer p.AgentLogger.Catch()
+func (s *Factory) Create(ctx context.Context, req *factoryv1.CreateRequest) (*factoryv1.CreateResponse, error) {
+	defer s.Wool.Catch()
+	ctx = s.Provider.WithContext(ctx)
 
-	err := p.Templates(p.Context(), p.Information, services.WithFactory(factory), services.WithBuilder(builder))
+	err := s.Templates(ctx, s.Information, services.WithFactory(factory), services.WithBuilder(builder))
 	if err != nil {
 		return nil, err
 	}
 
-	err = os.MkdirAll(path.Join(p.Location, "routing"), 0755)
+	err = s.LoadEndpoints(ctx)
 	if err != nil {
-		return nil, p.Wrapf(err, "cannot create routing directory")
-	}
-	err = p.LoadEndpoints()
-	if err != nil {
-		return nil, p.Wrapf(err, "cannot create endpoints")
+		return nil, s.Wrapf(err, "cannot create endpoints")
 	}
 
-	return p.Base.CreateResponse(ctx, p.Settings, p.Endpoints...)
+	return s.Base.CreateResponse(ctx, s.Settings, s.Endpoints...)
 }
 
-func (p *Factory) Update(ctx context.Context, req *factoryv1.UpdateRequest) (*factoryv1.UpdateResponse, error) {
-	defer p.AgentLogger.Catch()
+func (s *Factory) Update(ctx context.Context, req *factoryv1.UpdateRequest) (*factoryv1.UpdateResponse, error) {
+	defer s.Wool.Catch()
 
 	return &factoryv1.UpdateResponse{}, nil
 }
 
-func (p *Factory) CheckState(group *basev1.EndpointGroup) error {
-	defer p.AgentLogger.Catch()
-	es := endpoints.FlattenEndpoints(p.Context(), group)
+func (s *Factory) CheckState(ctx context.Context, group *basev1.EndpointGroup) error {
+	defer s.Wool.Catch()
+	es := endpoints.FlattenEndpoints(ctx, group)
 	// routes should correspond to dependency groups
-	for _, route := range p.Routes {
-		matchingEndpoint := endpoints.FindEndpointForRoute(p.Context(), es, configurations.UnwrapRoute(route))
+	for _, route := range s.Routes {
+		matchingEndpoint := endpoints.FindEndpointForRoute(ctx, es, configurations.UnwrapRoute(route))
 		if matchingEndpoint == nil {
-			p.DebugMe("found a route not matching to a endpoint - deleting it")
+			s.DebugMe("found a route not matching to a endpoint - deleting it")
 		}
-		err := route.Delete(p.Context(), p.RoutesLocation)
+		err := route.Delete(ctx, s.RoutesLocation)
 		if err != nil {
-			return p.Wrapf(err, "cannot delete route")
+			return s.Wrapf(err, "cannot delete route")
 		}
 	}
 	return nil
 }
 
-func (p *Factory) Sync(ctx context.Context, req *factoryv1.SyncRequest) (*factoryv1.SyncResponse, error) {
-	defer p.AgentLogger.Catch()
+func (s *Factory) Sync(ctx context.Context, req *factoryv1.SyncRequest) (*factoryv1.SyncResponse, error) {
+	defer s.Wool.Catch()
 
-	err := p.CheckState(req.DependencyEndpointGroup)
+	err := s.CheckState(ctx, req.DependencyEndpointGroup)
 	if err != nil {
-		return nil, p.Wrapf(err, "cannot check state")
+		return nil, s.Wrapf(err, "cannot check state")
 	}
 	//
-	//if p.sync == nil {
+	//if s.sync == nil {
 	//	// From request
-	//	p.DebugMe("Setup communication")
+	//	s.DebugMe("Setup communication")
 	//
 	//	// Detect if we have unknown routing and create them
-	//	routes := endpoints.DetectNewRoutes(p.Context(), configurations.UnwrapRoutes(p.Routes), req.DependencyEndpointGroup)
+	//	routes := endpoints.DetectNewRoutes(ctx, configurations.UnwrapRoutes(s.Routes), req.DependencyEndpointGroup)
 	//
 	//	if len(routes) == 0 {
-	//		p.DebugMe("no new routing detected")
-	//		p.sync = communicate.NewNoOpClientContext()
+	//		s.DebugMe("no new routing detected")
+	//		s.sync = communicate.NewNoOpClientContext()
 	//		return &factoryv1.SyncResponse{}, nil
 	//	}
-	//	err := p.NewSyncCommunicate(routes)
+	//	err := s.NewSyncCommunicate(routes)
 	//	if err != nil {
-	//		return nil, p.Wrapf(err, "cannot create sync communicate")
+	//		return nil, s.Wrapf(err, "cannot create sync communicate")
 	//	}
-	//	if p.sync == nil {
-	//		return nil, p.Errorf("sync: after new sync communicate == nil")
+	//	if s.sync == nil {
+	//		return nil, s.Errorf("sync: after new sync communicate == nil")
 	//	}
-	//	if len(p.syncRoutesQuestions) > 0 {
-	//		p.DebugMe("we need some communication!")
+	//	if len(s.syncRoutesQuestions) > 0 {
+	//		s.DebugMe("we need some communication!")
 	//		return &factoryv1.SyncResponse{NeedCommunication: true}, nil
 	//	} else {
 	//		return &factoryv1.SyncResponse{NeedCommunication: false}, nil
 	//	}
 	//}
-	//if p.sync == nil {
-	//	return nil, p.Errorf("sync: after sync == nil")
+	//if s.sync == nil {
+	//	return nil, s.Errorf("sync: after sync == nil")
 	//}
 	//
-	//if state := p.sync.(*communicate.ClientContext); state != nil {
-	//	for i := range p.syncRoutesQuestions {
-	//		p.DebugMe("state: %v", state.Get())
+	//if state := s.sync.(*communicate.ClientContext); state != nil {
+	//	for i := range s.syncRoutesQuestions {
+	//		s.DebugMe("state: %v", state.Get())
 	//		confirm, err := state.SafeConfirm(i)
 	//		if err != nil {
-	//			return nil, p.Wrapf(err, "cannot get confirm")
+	//			return nil, s.Wrapf(err, "cannot get confirm")
 	//		}
 	//		expose := confirm.Confirmed
 	//		if expose {
-	//			route := p.syncRoutes[i]
-	//			p.DebugMe("exposing %s", route.Path)
-	//			err := route.Save(p.Context(), p.RoutesLocation)
+	//			route := s.syncRoutes[i]
+	//			s.DebugMe("exposing %s", route.Path)
+	//			err := route.Save(ctx, s.RoutesLocation)
 	//			if err != nil {
-	//				return nil, p.Wrapf(err, "cannot save route")
+	//				return nil, s.Wrapf(err, "cannot save route")
 	//			}
 	//		}
 	//	}
 	//}
 	//
 	//// Make sure the communication for create has been done successfully
-	//if !p.sync.Ready() {
-	//	return nil, p.Errorf("sync: validation communication not ready")
+	//if !s.sync.Ready() {
+	//	return nil, s.Errorf("sync: validation communication not ready")
 	//}
 
 	return &factoryv1.SyncResponse{}, nil
@@ -175,47 +177,45 @@ type DockerTemplating struct {
 	Envs []Env
 }
 
-func (p *Factory) Build(ctx context.Context, req *factoryv1.BuildRequest) (*factoryv1.BuildResponse, error) {
-	p.AgentLogger.Debugf("building docker image")
-	p.DebugMe("building docker image with routes %v", p.Routes)
-	p.DebugMe("got dependency group %v", endpoints.CondensedOutput(req.DependencyEndpointGroup))
+func (s *Factory) Build(ctx context.Context, req *factoryv1.BuildRequest) (*factoryv1.BuildResponse, error) {
+	s.Wool.Debug("building docker image")
 	// We want to use DNS to create NetworkMapping
-	networkMapping, err := p.Network(endpoints.FlattenEndpoints(p.Context(), req.DependencyEndpointGroup))
+	networkMapping, err := s.Network(endpoints.FlattenEndpoints(ctx, req.DependencyEndpointGroup))
 	if err != nil {
-		return nil, p.Wrapf(err, "cannot create network mapping")
+		return nil, s.Wrapf(err, "cannot create network mapping")
 	}
-	config, err := p.createConfig(networkMapping)
+	config, err := s.createConfig(ctx, networkMapping)
 	if err != nil {
-		return nil, p.Wrapf(err, "cannot write config")
+		return nil, s.Wrapf(err, "cannot write config")
 	}
 
-	target := p.Local("codefly/builder/settings/routing.json")
+	target := s.Local("codefly/builder/settings/routing.json")
 	err = os.WriteFile(target, config, 0o644)
 	if err != nil {
-		return nil, p.Wrapf(err, "cannot write settings to %s", target)
+		return nil, s.Wrapf(err, "cannot write settings to %s", target)
 	}
 
-	err = os.Remove(p.Local("codefly/builder/Dockerfile"))
+	err = os.Remove(s.Local("codefly/builder/Dockerfile"))
 	if err != nil {
-		return nil, p.Wrapf(err, "cannot remove dockerfile")
+		return nil, s.Wrapf(err, "cannot remove dockerfile")
 	}
-	err = p.Templates(nil, services.WithBuilder(builder))
+	err = s.Templates(nil, services.WithBuilder(builder))
 	if err != nil {
-		return nil, p.Wrapf(err, "cannot copy and apply template")
+		return nil, s.Wrapf(err, "cannot copy and apply template")
 	}
 	builder, err := dockerhelpers.NewBuilder(dockerhelpers.BuilderConfiguration{
-		Root:       p.Location,
+		Root:       s.Location,
 		Dockerfile: "codefly/builder/Dockerfile",
-		Image:      p.DockerImage().Name,
-		Tag:        p.DockerImage().Tag,
+		Image:      s.DockerImage().Name,
+		Tag:        s.DockerImage().Tag,
 	})
 	if err != nil {
-		return nil, p.Wrapf(err, "cannot create builder")
+		return nil, s.Wrapf(err, "cannot create builder")
 	}
-	builder.WithLogger(p.AgentLogger)
+	// builder.WithLogger(s.Wool)
 	_, err = builder.Build()
 	if err != nil {
-		return nil, p.Wrapf(err, "cannot build image")
+		return nil, s.Wrapf(err, "cannot build image")
 	}
 	return &factoryv1.BuildResponse{}, nil
 }
@@ -230,10 +230,10 @@ type DeploymentParameter struct {
 	Deployment
 }
 
-func (p *Factory) Deploy(ctx context.Context, req *factoryv1.DeploymentRequest) (*factoryv1.DeploymentResponse, error) {
-	defer p.AgentLogger.Catch()
-	//deploy := DeploymentParameter{Image: p.DockerImage(), Information: p.Information, Deployment: Deployment{Replicas: 1}}
-	//err := p.Templates(deploy,
+func (s *Factory) Deploy(ctx context.Context, req *factoryv1.DeploymentRequest) (*factoryv1.DeploymentResponse, error) {
+	defer s.Wool.Catch()
+	//deploy := DeploymentParameter{Image: s.DockerImage(), Information: s.Information, Deployment: Deployment{Replicas: 1}}
+	//err := s.Templates(deploy,
 	//	services.WithDeploymentFor(deployment, "kustomize/base", templates.WithOverrideAll()),
 	//	services.WithDeploymentFor(deployment, "kustomize/overlays/environment",
 	//		services.WithDestination("kustomize/overlays/%s", req.Environment.Name), templates.WithOverrideAll()),
@@ -244,50 +244,50 @@ func (p *Factory) Deploy(ctx context.Context, req *factoryv1.DeploymentRequest) 
 	return &factoryv1.DeploymentResponse{}, nil
 }
 
-func (p *Factory) Network(es []*basev1.Endpoint) ([]*runtimev1.NetworkMapping, error) {
+func (s *Factory) Network(es []*basev1.Endpoint) ([]*runtimev1.NetworkMapping, error) {
 	return nil, nil
-	//p.DebugMe("in network: %v", endpoints.Condensed(es))
-	//pm, err := network.NewServiceDnsManager(p.Context(), p.Identity)
+	//s.DebugMe("in network: %v", endpoints.Condensed(es))
+	//pm, err := network.NewServiceDnsManager(ctx, s.Identity)
 	//if err != nil {
-	//	return nil, p.Wrapf(err, "cannot create network manager")
+	//	return nil, s.Wrapf(err, "cannot create network manager")
 	//}
 	//for _, endpoint := range es {
 	//	err = pm.Expose(endpoint)
 	//	if err != nil {
-	//		return nil, p.Wrapf(err, "cannot add grpc endpoint to network manager")
+	//		return nil, s.Wrapf(err, "cannot add grpc endpoint to network manager")
 	//	}
 	//}
 	//err = pm.Reserve()
 	//if err != nil {
-	//	return nil, p.Wrapf(err, "cannot reserve ports")
+	//	return nil, s.Wrapf(err, "cannot reserve ports")
 	//}
 	//return pm.NetworkMapping()
 }
 
-func (p *Factory) NewSyncCommunicate(routes []*configurations.RestRoute) error {
-	//p.DebugMe("adding new routes maybe #%d", len(routes))
-	//client, err := communicate.NewClientContext(p.Context(), communicate.Sync)
+func (s *Factory) NewSyncCommunicate(routes []*configurations.RestRoute) error {
+	//s.DebugMe("adding new routes maybe #%d", len(routes))
+	//client, err := communicate.NewClientContext(ctx, communicate.Sync)
 	//if err != nil {
-	//	return p.Wrapf(err, "cannot create new client context")
+	//	return s.Wrapf(err, "cannot create new client context")
 	//}
 	//// Set the state of sync communicate
 	//for _, route := range routes {
-	//	p.syncRoutes = append(p.syncRoutes, route)
+	//	s.syncRoutes = append(s.syncRoutes, route)
 	//	fullPath := fmt.Sprintf("%s/%s%s", route.Application, route.Service, route.Path)
-	//	p.syncRoutesQuestions = append(p.syncRoutesQuestions,
+	//	s.syncRoutesQuestions = append(s.syncRoutesQuestions,
 	//		client.NewConfirm(&agentsv1.Message{
 	//			Name:    fullPath,
 	//			Message: fmt.Sprintf("Want to expose %s: %v?", fullPath, route.Methods),
 	//		}, true))
 	//}
-	//p.seq, err = client.NewSequence(p.syncRoutesQuestions...)
+	//s.seq, err = client.NewSequence(s.syncRoutesQuestions...)
 	//if err != nil {
-	//	return p.Wrapf(err, "can't create sequence")
+	//	return s.Wrapf(err, "can't create sequence")
 	//}
-	//p.sync = client
-	//err = p.Wire(communicate.Sync, client)
+	//s.sync = client
+	//err = s.Wire(communicate.Sync, client)
 	//if err != nil {
-	//	return p.Wrapf(err, "cannot wire")
+	//	return s.Wrapf(err, "cannot wire")
 	//}
 	return nil
 }

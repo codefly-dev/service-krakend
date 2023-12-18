@@ -3,14 +3,14 @@ package main
 import (
 	"context"
 	"embed"
+
 	"github.com/codefly-dev/core/agents"
 	"github.com/codefly-dev/core/agents/endpoints"
-	basev1 "github.com/codefly-dev/core/generated/v1/go/proto/base"
-	agentv1 "github.com/codefly-dev/core/generated/v1/go/proto/services/agent"
-	"github.com/codefly-dev/core/shared"
-
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
+	basev1 "github.com/codefly-dev/core/generated/go/base/v1"
+	agentv1 "github.com/codefly-dev/core/generated/go/services/agent/v1"
+	"github.com/codefly-dev/core/shared"
 )
 
 // Agent version
@@ -51,9 +51,9 @@ func NewService() *Service {
 }
 
 // LoadRoutes from routing configuration folder
-func (s *Service) LoadRoutes() error {
+func (s *Service) LoadRoutes(ctx context.Context) error {
 	var err error
-	s.Routes, err = configurations.LoadApplicationExtendedRoutes[Auth](s.Context(), s.RoutesLocation)
+	s.Routes, err = configurations.LoadApplicationExtendedRoutes[Auth](ctx, s.RoutesLocation)
 	if err != nil {
 		return s.Wrapf(err, "cannot load routing")
 	}
@@ -61,9 +61,9 @@ func (s *Service) LoadRoutes() error {
 	return nil
 }
 
-func (s *Service) LoadEndpoints() error {
+func (s *Service) LoadEndpoints(ctx context.Context) error {
 	var err error
-	s.Endpoint, err = endpoints.NewRestAPI(&configurations.Endpoint{Name: s.Identity.Name})
+	s.Endpoint, err = endpoints.NewRestAPI(ctx, &configurations.Endpoint{Name: s.Identity.Name})
 	if err != nil {
 		return s.Wrapf(err, "cannot  create tcp endpoint")
 	}

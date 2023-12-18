@@ -35,6 +35,8 @@ github.com/codefly-dev/core v0.0.35 h1:Ln334n1J1XJQdarF9XjrhwaL4sbvklOyNDMeZnTeu
 github.com/codefly-dev/core v0.0.35/go.mod h1:uSbrLX6gKX8ngjrheT7v6+AcvlRmTC+itEIoH7Ngpwc=
 github.com/codefly-dev/core v0.0.39 h1:1a8kuTY7jciYtcJ96KMJkaDcKsBx5AU6IUxwereBqvk=
 github.com/codefly-dev/core v0.0.39/go.mod h1:uSbrLX6gKX8ngjrheT7v6+AcvlRmTC+itEIoH7Ngpwc=
+github.com/codefly-dev/core v0.0.54 h1:tWf3L/JkWeFU5Ye2GuQuAFxors3+WOXUXMItQWTT47E=
+github.com/codefly-dev/core v0.0.54/go.mod h1:fecjr0LRK+D6HpR1Nkidw/fPyi0yv4s7AjgTvjMLvy8=
 github.com/codefly-dev/core v0.1.0 h1:XRYsdCh0ZXCcgFIaoTizsiwG01dJpnQ8axLHz5uFLXs=
 github.com/codefly-dev/core v0.1.0/go.mod h1:wgv/VPpetMgNgvPaQo4k/AR0adccu+y3+yANcnVuXb8=
 github.com/codefly-dev/golor v0.0.10 h1:eqNxY3aSVbXDWo+3S9fcRynCEStPNo033owzwvzziOQ=
@@ -289,6 +291,7 @@ golang.org/x/crypto v0.16.0 h1:mMMrFzRSCF0GvB7Ne27XVtVAaXLrPmgPC7/v0tkwHaY=
 golang.org/x/crypto v0.16.0/go.mod h1:gCAAfMLgwOJRpTjQ2zCCt2OcSfYMTeZVSRtQlPC7Nq4=
 golang.org/x/exp v0.0.0-20231206192017-f3f8817b8deb h1:c0vyKkb6yr3KR7jEfJaOSv4lG7xPkbN6r52aJz1d8a8=
 golang.org/x/exp v0.0.0-20231206192017-f3f8817b8deb/go.mod h1:iRJReGqOEeBhDZGkGbynYwcHlctCvnjTYIamk7uXpHI=
+golang.org/x/exp v0.0.0-20231214170342-aacd6d4b4611/go.mod h1:iRJReGqOEeBhDZGkGbynYwcHlctCvnjTYIamk7uXpHI=
 golang.org/x/mod v0.2.0/go.mod h1:s0Qsj1ACt9ePp/hMypM3fl4fZqREWJwdYDEqhRiZZUA=
 golang.org/x/mod v0.3.0/go.mod h1:s0Qsj1ACt9ePp/hMypM3fl4fZqREWJwdYDEqhRiZZUA=
 golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4/go.mod h1:jJ57K6gSWd91VN4djpZkiMVwK6gcyfeH4XE8wZrZaV4=
