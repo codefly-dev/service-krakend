@@ -10,7 +10,6 @@ import (
 	agentv1 "github.com/codefly-dev/core/generated/go/services/agent/v1"
 	runtimev1 "github.com/codefly-dev/core/generated/go/services/runtime/v1"
 	"github.com/codefly-dev/core/runners"
-	"github.com/codefly-dev/core/shared"
 )
 
 type Runtime struct {
@@ -130,9 +129,9 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev1.StopRequest) (*runtim
 	defer s.Wool.Catch()
 
 	s.Wool.Debug("stopping service")
-	err := s.Runner.Kill()
+	err := s.Runner.Kill(ctx)
 	if err != nil {
-		return nil, shared.Wrapf(err, "cannot kill go")
+		return nil, s.Wool.Wrapf(err, "cannot kill go")
 	}
 
 	err = s.Base.Stop()
@@ -160,13 +159,13 @@ func (s *Runtime) Network(ctx context.Context) ([]*runtimev1.NetworkMapping, err
 	if err != nil {
 		return nil, s.Wrapf(err, "cannot add grpc endpoint to network manager")
 	}
-	err = pm.Reserve()
+	err = pm.Reserve(ctx)
 	if err != nil {
 		return nil, s.Wrapf(err, "cannot reserve ports")
 	}
-	s.Port, err = pm.Port(s.Endpoint)
+	s.Port, err = pm.Port(ctx, s.Endpoint)
 	if err != nil {
 		return nil, s.Wrapf(err, "cannot get port")
 	}
-	return pm.NetworkMapping()
+	return pm.NetworkMapping(ctx)
 }

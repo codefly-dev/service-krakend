@@ -40,7 +40,7 @@ func (s *Factory) Init(ctx context.Context, req *factoryv1.InitRequest) (*factor
 	}
 
 	s.RoutesLocation = s.Local("routing")
-	err = shared.CheckDirectoryOrCreate(ctx, s.RoutesLocation)
+	_, err = shared.CheckDirectoryOrCreate(ctx, s.RoutesLocation)
 	if err != nil {
 		return nil, s.Wrapf(err, "cannot create routes location")
 	}
@@ -55,12 +55,12 @@ func (s *Factory) Init(ctx context.Context, req *factoryv1.InitRequest) (*factor
 		return s.FactoryInitResponseError(err)
 	}
 
-	readme, err := templates.ApplyTemplateFrom(shared.Embed(factory), "templates/factory/README.md", s.Information)
+	gettingStarted, err := templates.ApplyTemplateFrom(shared.Embed(factory), "templates/factory/GETTING_STARTED.md", s.Information)
 	if err != nil {
 		return nil, err
 	}
 
-	return s.FactoryInitResponse(s.Endpoints, readme)
+	return s.FactoryInitResponse(s.Endpoints, gettingStarted)
 }
 
 func (s *Factory) Create(ctx context.Context, req *factoryv1.CreateRequest) (*factoryv1.CreateResponse, error) {
@@ -213,7 +213,7 @@ func (s *Factory) Build(ctx context.Context, req *factoryv1.BuildRequest) (*fact
 		return nil, s.Wrapf(err, "cannot create builder")
 	}
 	// builder.WithLogger(s.Wool)
-	_, err = builder.Build()
+	_, err = builder.Build(ctx)
 	if err != nil {
 		return nil, s.Wrapf(err, "cannot build image")
 	}
