@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
+	"github.com/codefly-dev/core/configurations/standards"
 
-	"github.com/codefly-dev/core/agents/endpoints"
 	"github.com/codefly-dev/core/agents/network"
-	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
 	agentv1 "github.com/codefly-dev/core/generated/go/services/agent/v1"
 	runtimev1 "github.com/codefly-dev/core/generated/go/services/runtime/v1"
@@ -32,55 +31,48 @@ func NewRuntime() *Runtime {
 	}
 }
 
-func (s *Runtime) Init(ctx context.Context, req *runtimev1.InitRequest) (*runtimev1.InitResponse, error) {
+func (s *Runtime) Load(ctx context.Context, req *runtimev1.LoadRequest) (*runtimev1.LoadResponse, error) {
 	defer s.Wool.Catch()
 
-	err := s.Base.Init(ctx, req.Identity, s.Settings)
+	err := s.Base.Load(ctx, req.Identity, s.Settings)
 	if err != nil {
-		return s.Base.RuntimeInitResponseError(err)
+		return s.Base.Runtime.LoadError(err)
 	}
 
 	s.RoutesLocation = s.Local("routing")
 
-	s.Endpoint, err = endpoints.NewRestAPI(ctx, &configurations.Endpoint{Name: s.Identity.Name, API: configurations.Rest, Visibility: "public"})
+	s.Endpoint, err = configurations.NewRestAPI(ctx, &configurations.Endpoint{Name: s.Identity.Name, API: standards.REST, Visibility: "public"})
 	if err != nil {
-		return s.Base.RuntimeInitResponseError(err)
+		return s.Base.Runtime.LoadError(err)
 	}
 
 	// From configurations
 	err = s.LoadRoutes(ctx)
 	if err != nil {
-		return s.Base.RuntimeInitResponseError(err)
+		return s.Base.Runtime.LoadError(err)
 	}
-	//channels, err := s.WithCommunications(services.NewDynamicChannel(communicate.Sync))
-	//if err != nil {
-	//	return s.Base.RuntimeInitResponseError(err)
-	//}
-	return s.Base.RuntimeInitResponse(s.Endpoints)
+
+	return s.Base.Runtime.LoadResponse(s.Endpoints)
 }
 
-func (s *Runtime) Configure(ctx context.Context, req *runtimev1.ConfigureRequest) (*runtimev1.ConfigureResponse, error) {
+func (s *Runtime) Init(ctx context.Context, req *runtimev1.InitRequest) (*runtimev1.InitResponse, error) {
 	defer s.Wool.Catch()
 
-	nets, err := s.Network(ctx)
+	var err error
+	s.NetworkMappings, err = s.Network(ctx)
 	if err != nil {
-		return &runtimev1.ConfigureResponse{Status: services.ConfigureError(err)}, nil
+		return s.Base.Runtime.InitError(err)
 	}
 
-	return &runtimev1.ConfigureResponse{Status: services.ConfigureSuccess(),
-		NetworkMappings: nets}, nil
+	return s.Base.Runtime.InitResponse()
 }
 
 func (s *Runtime) Start(ctx context.Context, req *runtimev1.StartRequest) (*runtimev1.StartResponse, error) {
 	defer s.Wool.Catch()
 
-	s.DebugMe("%s: network mapping: #%d", s.Identity.Name, len(req.NetworkMappings))
-	s.DebugMe("%s: routing", s.Routes)
-
 	err := s.writeConfig(ctx, req.NetworkMappings)
 	if err != nil {
-		s.DebugMe("cannot write config: %v", err)
-		return nil, s.Wrapf(err, "cannot write config")
+		return s.Runtime.StartError(err)
 	}
 
 	envs := []string{
@@ -98,27 +90,12 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev1.StartRequest) (*runt
 		Debug: true,
 	}
 
-	err = s.Runner.Init(context.Background())
+	_, err = s.Runner.Run(context.Background())
 	if err != nil {
-		s.DebugMe("runner init failed %v", err)
-		return &runtimev1.StartResponse{
-			Status: services.StartError(err),
-		}, nil
+		return s.Runtime.StartError(err)
 	}
-	// useful for debugging -- while I fix the error handling with Start
-	tracker, err := s.Runner.Run(context.Background())
-	if err != nil {
-		s.DebugMe("runner failed %v", err)
-		return &runtimev1.StartResponse{
-			Status: services.StartError(err),
-		}, nil
-	}
-	s.DebugMe("after run")
 
-	return &runtimev1.StartResponse{
-		Status:   services.StartSuccess(),
-		Trackers: []*runtimev1.Tracker{tracker.Proto()},
-	}, nil
+	return s.Runtime.StartResponse(nil)
 }
 
 func (s *Runtime) Information(ctx context.Context, req *runtimev1.InformationRequest) (*runtimev1.InformationResponse, error) {
@@ -150,7 +127,6 @@ func (s *Runtime) Communicate(ctx context.Context, req *agentv1.Engage) (*agentv
  */
 
 func (s *Runtime) Network(ctx context.Context) ([]*runtimev1.NetworkMapping, error) {
-	s.DebugMe("in network")
 	pm, err := network.NewServicePortManager(ctx, s.Identity)
 	if err != nil {
 		return nil, s.Wrapf(err, "cannot create network manager")

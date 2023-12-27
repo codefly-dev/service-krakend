@@ -5,7 +5,6 @@ import (
 	"embed"
 	"os"
 
-	"github.com/codefly-dev/core/agents/endpoints"
 	dockerhelpers "github.com/codefly-dev/core/agents/helpers/docker"
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
@@ -30,11 +29,10 @@ func NewFactory() *Factory {
 	}
 }
 
-func (s *Factory) Init(ctx context.Context, req *factoryv1.InitRequest) (*factoryv1.InitResponse, error) {
+func (s *Factory) Load(ctx context.Context, req *factoryv1.LoadRequest) (*factoryv1.LoadResponse, error) {
 	defer s.Wool.Catch()
-	ctx = s.Provider.WithContext(ctx)
 
-	err := s.Base.Init(ctx, req.Identity, s.Settings)
+	err := s.Base.Load(ctx, req.Identity, s.Settings)
 	if err != nil {
 		return nil, err
 	}
@@ -42,17 +40,17 @@ func (s *Factory) Init(ctx context.Context, req *factoryv1.InitRequest) (*factor
 	s.RoutesLocation = s.Local("routing")
 	_, err = shared.CheckDirectoryOrCreate(ctx, s.RoutesLocation)
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot create routes location")
+		return s.Factory.LoadError(err)
 	}
 
 	err = s.LoadRoutes(ctx)
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot load routes")
+		return s.Factory.LoadError(err)
 	}
 
 	err = s.LoadEndpoints(ctx)
 	if err != nil {
-		return s.FactoryInitResponseError(err)
+		return s.Factory.LoadError(err)
 	}
 
 	gettingStarted, err := templates.ApplyTemplateFrom(shared.Embed(factory), "templates/factory/GETTING_STARTED.md", s.Information)
@@ -60,12 +58,11 @@ func (s *Factory) Init(ctx context.Context, req *factoryv1.InitRequest) (*factor
 		return nil, err
 	}
 
-	return s.FactoryInitResponse(s.Endpoints, gettingStarted)
+	return s.Factory.LoadResponse(s.Endpoints, gettingStarted)
 }
 
 func (s *Factory) Create(ctx context.Context, req *factoryv1.CreateRequest) (*factoryv1.CreateResponse, error) {
 	defer s.Wool.Catch()
-	ctx = s.Provider.WithContext(ctx)
 
 	err := s.Templates(ctx, s.Information, services.WithFactory(factory), services.WithBuilder(builder))
 	if err != nil {
@@ -77,7 +74,7 @@ func (s *Factory) Create(ctx context.Context, req *factoryv1.CreateRequest) (*fa
 		return nil, s.Wrapf(err, "cannot create endpoints")
 	}
 
-	return s.Base.CreateResponse(ctx, s.Settings, s.Endpoints...)
+	return s.Base.Factory.CreateResponse(ctx, s.Settings, s.Endpoints...)
 }
 
 func (s *Factory) Update(ctx context.Context, req *factoryv1.UpdateRequest) (*factoryv1.UpdateResponse, error) {
@@ -88,12 +85,12 @@ func (s *Factory) Update(ctx context.Context, req *factoryv1.UpdateRequest) (*fa
 
 func (s *Factory) CheckState(ctx context.Context, group *basev1.EndpointGroup) error {
 	defer s.Wool.Catch()
-	es := endpoints.FlattenEndpoints(ctx, group)
+	es := configurations.FlattenEndpoints(ctx, group)
 	// routes should correspond to dependency groups
 	for _, route := range s.Routes {
-		matchingEndpoint := endpoints.FindEndpointForRoute(ctx, es, configurations.UnwrapRoute(route))
+		matchingEndpoint := configurations.FindEndpointForRoute(ctx, es, configurations.UnwrapRoute(route))
 		if matchingEndpoint == nil {
-			s.DebugMe("found a route not matching to a endpoint - deleting it")
+			s.Base.Debug("found a route not matching to a endpoint - deleting it")
 		}
 		err := route.Delete(ctx, s.RoutesLocation)
 		if err != nil {
@@ -116,7 +113,7 @@ func (s *Factory) Sync(ctx context.Context, req *factoryv1.SyncRequest) (*factor
 	//	s.DebugMe("Setup communication")
 	//
 	//	// Detect if we have unknown routing and create them
-	//	routes := endpoints.DetectNewRoutes(ctx, configurations.UnwrapRoutes(s.Routes), req.DependencyEndpointGroup)
+	//	routes := configurations.DetectNewRoutes(ctx, configurations.UnwrapRoutes(s.Routes), req.DependencyEndpointGroup)
 	//
 	//	if len(routes) == 0 {
 	//		s.DebugMe("no new routing detected")
@@ -180,7 +177,7 @@ type DockerTemplating struct {
 func (s *Factory) Build(ctx context.Context, req *factoryv1.BuildRequest) (*factoryv1.BuildResponse, error) {
 	s.Wool.Debug("building docker image")
 	// We want to use DNS to create NetworkMapping
-	networkMapping, err := s.Network(endpoints.FlattenEndpoints(ctx, req.DependencyEndpointGroup))
+	networkMapping, err := s.Network(configurations.FlattenEndpoints(ctx, req.DependencyEndpointGroup))
 	if err != nil {
 		return nil, s.Wrapf(err, "cannot create network mapping")
 	}
@@ -246,7 +243,7 @@ func (s *Factory) Deploy(ctx context.Context, req *factoryv1.DeploymentRequest) 
 
 func (s *Factory) Network(es []*basev1.Endpoint) ([]*runtimev1.NetworkMapping, error) {
 	return nil, nil
-	//s.DebugMe("in network: %v", endpoints.Condensed(es))
+	//s.DebugMe("in network: %v", configurations.Condensed(es))
 	//pm, err := network.NewServiceDnsManager(ctx, s.Identity)
 	//if err != nil {
 	//	return nil, s.Wrapf(err, "cannot create network manager")

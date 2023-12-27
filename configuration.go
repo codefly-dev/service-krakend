@@ -102,7 +102,6 @@ func (s *Service) createConfig(ctx context.Context, nms []*runtimev1.NetworkMapp
 		return nil, s.Wrapf(err, "cannot copy config")
 	}
 
-	s.DebugMe("write config with known routes: %v", s.Routes)
 	settings := KrakendSettings{Port: s.Port}
 	// setup CORS configuration globally
 	settings.ExtraConfig = Cors(CorsPolicyKey)

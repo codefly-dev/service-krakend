@@ -8,7 +8,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/codefly-dev/core/agents"
-	"github.com/codefly-dev/core/agents/endpoints"
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
 	basev1 "github.com/codefly-dev/core/generated/go/base/v1"
@@ -43,7 +42,6 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv1.AgentInfor
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	s.DebugMe("readme success")
 
 	return &agentv1.AgentInformation{
 		Capabilities: []*agentv1.Capability{
@@ -71,13 +69,12 @@ func (s *Service) LoadRoutes(ctx context.Context) error {
 	if err != nil {
 		return s.Wrapf(err, "cannot load routing")
 	}
-	s.DebugMe("found #%d routes", len(s.Routes))
 	return nil
 }
 
 func (s *Service) LoadEndpoints(ctx context.Context) error {
 	var err error
-	s.Endpoint, err = endpoints.NewRestAPI(ctx, &configurations.Endpoint{Name: s.Identity.Name})
+	s.Endpoint, err = configurations.NewRestAPI(ctx, &configurations.Endpoint{Name: s.Identity.Name})
 	if err != nil {
 		return s.Wrapf(err, "cannot  create tcp endpoint")
 	}
