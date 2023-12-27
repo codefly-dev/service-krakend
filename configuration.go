@@ -85,12 +85,12 @@ func gatewayTarget(r *configurations.RestRoute) string {
 func (s *Service) writeConfig(ctx context.Context, nms []*runtimev1.NetworkMapping) error {
 	config, err := s.createConfig(ctx, nms)
 	if err != nil {
-		return s.Wrapf(err, "cannot create config")
+		return s.Wool.Wrapf(err, "cannot create config")
 	}
 	target := s.Local("config/settings/routing.json")
 	err = os.WriteFile(target, config, 0o644)
 	if err != nil {
-		return s.Wrapf(err, "cannot write settings to %s", target)
+		return s.Wool.Wrapf(err, "cannot write settings to %s", target)
 	}
 	return nil
 }
@@ -99,7 +99,7 @@ func (s *Service) createConfig(ctx context.Context, nms []*runtimev1.NetworkMapp
 	// Write the main config
 	err := shared.Embed(config).Copy("templates/krakend.config", s.Local("config/krakend.tmpl"))
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot copy config")
+		return nil, s.Wool.Wrapf(err, "cannot copy config")
 	}
 
 	settings := KrakendSettings{Port: s.Port}
@@ -109,7 +109,7 @@ func (s *Service) createConfig(ctx context.Context, nms []*runtimev1.NetworkMapp
 	for _, route := range s.Routes {
 		nm, err := services.NetworkMappingForRoute(ctx, &route.RestRoute, nms)
 		if err != nil {
-			return nil, s.Wrapf(err, "cannot get network mapping for route")
+			return nil, s.Wool.Wrapf(err, "cannot get network mapping for route")
 		}
 		var hosts []string
 		for _, h := range nm.Addresses {
@@ -131,7 +131,7 @@ func (s *Service) createConfig(ctx context.Context, nms []*runtimev1.NetworkMapp
 
 	content, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot marshal settings")
+		return nil, s.Wool.Wrapf(err, "cannot marshal settings")
 	}
 	return content, nil
 }

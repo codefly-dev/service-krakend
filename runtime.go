@@ -106,12 +106,12 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev1.StopRequest) (*runtim
 	defer s.Wool.Catch()
 
 	s.Wool.Debug("stopping service")
-	err := s.Runner.Kill(ctx)
-	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot kill go")
-	}
+	//err := s.Runner.Kill(ctx)
+	//if err != nil {
+	//	return nil, s.Wool.Wrapf(err, "cannot kill go")
+	//}
 
-	err = s.Base.Stop()
+	err := s.Base.Stop()
 	if err != nil {
 		return nil, err
 	}
@@ -129,19 +129,19 @@ func (s *Runtime) Communicate(ctx context.Context, req *agentv1.Engage) (*agentv
 func (s *Runtime) Network(ctx context.Context) ([]*runtimev1.NetworkMapping, error) {
 	pm, err := network.NewServicePortManager(ctx, s.Identity)
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot create network manager")
+		return nil, s.Wool.Wrapf(err, "cannot create network manager")
 	}
 	err = pm.Expose(s.Endpoint)
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot add grpc endpoint to network manager")
+		return nil, s.Wool.Wrapf(err, "cannot add grpc endpoint to network manager")
 	}
 	err = pm.Reserve(ctx)
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot reserve ports")
+		return nil, s.Wool.Wrapf(err, "cannot reserve ports")
 	}
 	s.Port, err = pm.Port(ctx, s.Endpoint)
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot get port")
+		return nil, s.Wool.Wrapf(err, "cannot get port")
 	}
 	return pm.NetworkMapping(ctx)
 }

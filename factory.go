@@ -71,7 +71,7 @@ func (s *Factory) Create(ctx context.Context, req *factoryv1.CreateRequest) (*fa
 
 	err = s.LoadEndpoints(ctx)
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot create endpoints")
+		return nil, s.Wool.Wrapf(err, "cannot create endpoints")
 	}
 
 	return s.Base.Factory.CreateResponse(ctx, s.Settings, s.Endpoints...)
@@ -94,7 +94,7 @@ func (s *Factory) CheckState(ctx context.Context, group *basev1.EndpointGroup) e
 		}
 		err := route.Delete(ctx, s.RoutesLocation)
 		if err != nil {
-			return s.Wrapf(err, "cannot delete route")
+			return s.Wool.Wrapf(err, "cannot delete route")
 		}
 	}
 	return nil
@@ -105,7 +105,7 @@ func (s *Factory) Sync(ctx context.Context, req *factoryv1.SyncRequest) (*factor
 
 	err := s.CheckState(ctx, req.DependencyEndpointGroup)
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot check state")
+		return nil, s.Wool.Wrapf(err, "cannot check state")
 	}
 	//
 	//if s.sync == nil {
@@ -122,7 +122,7 @@ func (s *Factory) Sync(ctx context.Context, req *factoryv1.SyncRequest) (*factor
 	//	}
 	//	err := s.NewSyncCommunicate(routes)
 	//	if err != nil {
-	//		return nil, s.Wrapf(err, "cannot create sync communicate")
+	//		return nil, s.Wool.Wrapf(err, "cannot create sync communicate")
 	//	}
 	//	if s.sync == nil {
 	//		return nil, s.Errorf("sync: after new sync communicate == nil")
@@ -143,7 +143,7 @@ func (s *Factory) Sync(ctx context.Context, req *factoryv1.SyncRequest) (*factor
 	//		s.DebugMe("state: %v", state.Get())
 	//		confirm, err := state.SafeConfirm(i)
 	//		if err != nil {
-	//			return nil, s.Wrapf(err, "cannot get confirm")
+	//			return nil, s.Wool.Wrapf(err, "cannot get confirm")
 	//		}
 	//		expose := confirm.Confirmed
 	//		if expose {
@@ -151,7 +151,7 @@ func (s *Factory) Sync(ctx context.Context, req *factoryv1.SyncRequest) (*factor
 	//			s.DebugMe("exposing %s", route.Path)
 	//			err := route.Save(ctx, s.RoutesLocation)
 	//			if err != nil {
-	//				return nil, s.Wrapf(err, "cannot save route")
+	//				return nil, s.Wool.Wrapf(err, "cannot save route")
 	//			}
 	//		}
 	//	}
@@ -179,26 +179,26 @@ func (s *Factory) Build(ctx context.Context, req *factoryv1.BuildRequest) (*fact
 	// We want to use DNS to create NetworkMapping
 	networkMapping, err := s.Network(configurations.FlattenEndpoints(ctx, req.DependencyEndpointGroup))
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot create network mapping")
+		return nil, s.Wool.Wrapf(err, "cannot create network mapping")
 	}
 	config, err := s.createConfig(ctx, networkMapping)
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot write config")
+		return nil, s.Wool.Wrapf(err, "cannot write config")
 	}
 
 	target := s.Local("codefly/builder/settings/routing.json")
 	err = os.WriteFile(target, config, 0o644)
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot write settings to %s", target)
+		return nil, s.Wool.Wrapf(err, "cannot write settings to %s", target)
 	}
 
 	err = os.Remove(s.Local("codefly/builder/Dockerfile"))
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot remove dockerfile")
+		return nil, s.Wool.Wrapf(err, "cannot remove dockerfile")
 	}
 	err = s.Templates(nil, services.WithBuilder(builder))
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot copy and apply template")
+		return nil, s.Wool.Wrapf(err, "cannot copy and apply template")
 	}
 	builder, err := dockerhelpers.NewBuilder(dockerhelpers.BuilderConfiguration{
 		Root:       s.Location,
@@ -207,12 +207,12 @@ func (s *Factory) Build(ctx context.Context, req *factoryv1.BuildRequest) (*fact
 		Tag:        s.DockerImage().Tag,
 	})
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot create builder")
+		return nil, s.Wool.Wrapf(err, "cannot create builder")
 	}
 	// builder.WithLogger(s.Wool)
 	_, err = builder.Build(ctx)
 	if err != nil {
-		return nil, s.Wrapf(err, "cannot build image")
+		return nil, s.Wool.Wrapf(err, "cannot build image")
 	}
 	return &factoryv1.BuildResponse{}, nil
 }
@@ -246,17 +246,17 @@ func (s *Factory) Network(es []*basev1.Endpoint) ([]*runtimev1.NetworkMapping, e
 	//s.DebugMe("in network: %v", configurations.Condensed(es))
 	//pm, err := network.NewServiceDnsManager(ctx, s.Identity)
 	//if err != nil {
-	//	return nil, s.Wrapf(err, "cannot create network manager")
+	//	return nil, s.Wool.Wrapf(err, "cannot create network manager")
 	//}
 	//for _, endpoint := range es {
 	//	err = pm.Expose(endpoint)
 	//	if err != nil {
-	//		return nil, s.Wrapf(err, "cannot add grpc endpoint to network manager")
+	//		return nil, s.Wool.Wrapf(err, "cannot add grpc endpoint to network manager")
 	//	}
 	//}
 	//err = pm.Reserve()
 	//if err != nil {
-	//	return nil, s.Wrapf(err, "cannot reserve ports")
+	//	return nil, s.Wool.Wrapf(err, "cannot reserve ports")
 	//}
 	//return pm.NetworkMapping()
 }
@@ -265,7 +265,7 @@ func (s *Factory) NewSyncCommunicate(routes []*configurations.RestRoute) error {
 	//s.DebugMe("adding new routes maybe #%d", len(routes))
 	//client, err := communicate.NewClientContext(ctx, communicate.Sync)
 	//if err != nil {
-	//	return s.Wrapf(err, "cannot create new client context")
+	//	return s.Wool.Wrapf(err, "cannot create new client context")
 	//}
 	//// Set the state of sync communicate
 	//for _, route := range routes {
@@ -279,12 +279,12 @@ func (s *Factory) NewSyncCommunicate(routes []*configurations.RestRoute) error {
 	//}
 	//s.seq, err = client.NewSequence(s.syncRoutesQuestions...)
 	//if err != nil {
-	//	return s.Wrapf(err, "can't create sequence")
+	//	return s.Wool.Wrapf(err, "can't create sequence")
 	//}
 	//s.sync = client
 	//err = s.Wire(communicate.Sync, client)
 	//if err != nil {
-	//	return s.Wrapf(err, "cannot wire")
+	//	return s.Wool.Wrapf(err, "cannot wire")
 	//}
 	return nil
 }

@@ -67,7 +67,7 @@ func (s *Service) LoadRoutes(ctx context.Context) error {
 	var err error
 	s.Routes, err = configurations.LoadApplicationExtendedRoutes[Auth](ctx, s.RoutesLocation)
 	if err != nil {
-		return s.Wrapf(err, "cannot load routing")
+		return s.Wool.Wrapf(err, "cannot load routing")
 	}
 	return nil
 }
@@ -76,7 +76,7 @@ func (s *Service) LoadEndpoints(ctx context.Context) error {
 	var err error
 	s.Endpoint, err = configurations.NewRestAPI(ctx, &configurations.Endpoint{Name: s.Identity.Name})
 	if err != nil {
-		return s.Wrapf(err, "cannot  create tcp endpoint")
+		return s.Wool.Wrapf(err, "cannot  create tcp endpoint")
 	}
 	return nil
 }
