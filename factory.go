@@ -83,12 +83,11 @@ func (s *Factory) Update(ctx context.Context, req *factoryv1.UpdateRequest) (*fa
 	return &factoryv1.UpdateResponse{}, nil
 }
 
-func (s *Factory) CheckState(ctx context.Context, group *basev1.EndpointGroup) error {
+func (s *Factory) CheckState(ctx context.Context, endpoints []*basev1.Endpoint) error {
 	defer s.Wool.Catch()
-	es := configurations.FlattenEndpoints(ctx, group)
 	// routes should correspond to dependency groups
 	for _, route := range s.Routes {
-		matchingEndpoint := configurations.FindEndpointForRoute(ctx, es, configurations.UnwrapRoute(route))
+		matchingEndpoint := configurations.FindEndpointForRoute(ctx, endpoints, configurations.UnwrapRoute(route))
 		if matchingEndpoint == nil {
 			s.Base.Debug("found a route not matching to a endpoint - deleting it")
 		}
@@ -103,7 +102,7 @@ func (s *Factory) CheckState(ctx context.Context, group *basev1.EndpointGroup) e
 func (s *Factory) Sync(ctx context.Context, req *factoryv1.SyncRequest) (*factoryv1.SyncResponse, error) {
 	defer s.Wool.Catch()
 
-	err := s.CheckState(ctx, req.DependencyEndpointGroup)
+	err := s.CheckState(ctx, req.DependenciesEndpoints)
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot check state")
 	}
@@ -177,7 +176,7 @@ type DockerTemplating struct {
 func (s *Factory) Build(ctx context.Context, req *factoryv1.BuildRequest) (*factoryv1.BuildResponse, error) {
 	s.Wool.Debug("building docker image")
 	// We want to use DNS to create NetworkMapping
-	networkMapping, err := s.Network(configurations.FlattenEndpoints(ctx, req.DependencyEndpointGroup))
+	networkMapping, err := s.Network(req.DependenciesEndpoints)
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot create network mapping")
 	}
