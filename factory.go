@@ -3,9 +3,8 @@ package main
 import (
 	"context"
 	"embed"
-	"os"
-
-	dockerhelpers "github.com/codefly-dev/core/agents/helpers/docker"
+	"fmt"
+	"github.com/codefly-dev/core/agents/communicate"
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
 	basev1 "github.com/codefly-dev/core/generated/go/base/v1"
@@ -14,13 +13,13 @@ import (
 	runtimev1 "github.com/codefly-dev/core/generated/go/services/runtime/v1"
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/templates"
+	"github.com/codefly-dev/core/wool"
 )
 
 type Factory struct {
 	*Service
 
-	syncRoutes          []*configurations.RestRoute
-	syncRoutesQuestions []*agentv1.Question
+	syncRoutes []*configurations.RestRoute
 }
 
 func NewFactory() *Factory {
@@ -58,13 +57,36 @@ func (s *Factory) Load(ctx context.Context, req *factoryv1.LoadRequest) (*factor
 		return nil, err
 	}
 
+	// communication on Sync
+	err = s.Communication.Register(ctx, communicate.New[factoryv1.CreateRequest](createCommunicate()))
+	if err != nil {
+		return s.Factory.LoadError(err)
+	}
+
 	return s.Factory.LoadResponse(s.Endpoints, gettingStarted)
+}
+
+const Public = "public"
+
+func createCommunicate() *communicate.Sequence {
+	return communicate.NewSequence(
+		communicate.NewConfirm(&agentv1.Message{Name: Public, Message: "Public API?", Description: "Exposed to external users"}, false),
+	)
 }
 
 func (s *Factory) Create(ctx context.Context, req *factoryv1.CreateRequest) (*factoryv1.CreateResponse, error) {
 	defer s.Wool.Catch()
 
-	err := s.Templates(ctx, s.Information, services.WithFactory(factory), services.WithBuilder(builder))
+	session, err := s.Communication.Done(ctx, communicate.Channel[factoryv1.CreateRequest]())
+	if err != nil {
+		return s.Factory.CreateError(err)
+	}
+
+	s.Settings.Public, err = session.Confirm(Public)
+	if err != nil {
+		return s.Factory.CreateError(err)
+	}
+	err = s.Templates(ctx, s.Information, services.WithFactory(factory), services.WithBuilder(builder))
 	if err != nil {
 		return nil, err
 	}
@@ -77,90 +99,91 @@ func (s *Factory) Create(ctx context.Context, req *factoryv1.CreateRequest) (*fa
 	return s.Base.Factory.CreateResponse(ctx, s.Settings, s.Endpoints...)
 }
 
+func (s *Factory) Init(ctx context.Context, req *factoryv1.InitRequest) (*factoryv1.InitResponse, error) {
+	defer s.Wool.Catch()
+
+	s.DependencyEndpoints = req.DependenciesEndpoints
+
+	err := s.UpdateAvailableRoutes(ctx)
+
+	if err != nil {
+		return s.Factory.InitError(err)
+	}
+
+	return s.Factory.InitResponse()
+}
+
 func (s *Factory) Update(ctx context.Context, req *factoryv1.UpdateRequest) (*factoryv1.UpdateResponse, error) {
 	defer s.Wool.Catch()
 
 	return &factoryv1.UpdateResponse{}, nil
 }
 
-func (s *Factory) CheckState(ctx context.Context, endpoints []*basev1.Endpoint) error {
+func (s *Factory) UpdateAvailableRoutes(ctx context.Context) error {
 	defer s.Wool.Catch()
-	// routes should correspond to dependency groups
+
+	s.Wool.Debug("examining routes from dependency endpoints", wool.SliceCountField(s.DependencyEndpoints))
+	// supported routes should correspond to dependency endpoints
 	for _, route := range s.Routes {
-		matchingEndpoint := configurations.FindEndpointForRoute(ctx, endpoints, configurations.UnwrapRoute(route))
+		matchingEndpoint := configurations.FindEndpointForRoute(ctx, s.DependencyEndpoints, configurations.UnwrapRoute(route))
 		if matchingEndpoint == nil {
-			s.Base.Debug("found a route not matching to a endpoint - deleting it")
+			s.Base.Info("found a route not matching to a dependency endpoint - deleting it")
 		}
 		err := route.Delete(ctx, s.RoutesLocation)
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot delete route")
 		}
 	}
+	// unwrap routes
+	knownRoutes := configurations.UnwrapRoutes(s.Routes)
+	s.syncRoutes = configurations.DetectNewRoutesFromEndpoints(ctx, knownRoutes, s.DependencyEndpoints)
+
+	if len(s.syncRoutes) == 0 {
+		return nil
+	}
+	s.Wool.Info("found new routes", wool.SliceCountField(s.syncRoutes))
+
+	// register communication for Sync
+	err := s.Communication.Register(ctx, communicate.New[factoryv1.SyncRequest](s.syncRoutesQuestions()))
+	if err != nil {
+		return s.Wool.Wrapf(err, "cannot communicate for sync")
+	}
+
 	return nil
+}
+
+func (s *Factory) syncRoutesQuestions() *communicate.Sequence {
+	var questions []*agentv1.Question
+	for _, route := range s.syncRoutes {
+		questions = append(questions, communicate.NewConfirm(&agentv1.Message{Name: route.Unique(),
+			Message:     fmt.Sprintf("Want to expose REST route: %s for service <%s> from application <%s>", route.Path, route.Service, route.Application),
+			Description: fmt.Sprintf("Corresponding route on the API will be %s", route.Unique())}, true))
+	}
+	return communicate.NewSequence(questions...)
 }
 
 func (s *Factory) Sync(ctx context.Context, req *factoryv1.SyncRequest) (*factoryv1.SyncResponse, error) {
 	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
 
-	err := s.CheckState(ctx, req.DependenciesEndpoints)
+	session, err := s.Communication.Done(ctx, communicate.Channel[factoryv1.SyncRequest]())
 	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot check state")
+		return s.Factory.SyncError(err)
 	}
-	//
-	//if s.sync == nil {
-	//	// From request
-	//	s.DebugMe("Setup communication")
-	//
-	//	// Detect if we have unknown routing and create them
-	//	routes := configurations.DetectNewRoutes(ctx, configurations.UnwrapRoutes(s.Routes), req.DependencyEndpointGroup)
-	//
-	//	if len(routes) == 0 {
-	//		s.DebugMe("no new routing detected")
-	//		s.sync = communicate.NewNoOpClientContext()
-	//		return &factoryv1.SyncResponse{}, nil
-	//	}
-	//	err := s.NewSyncCommunicate(routes)
-	//	if err != nil {
-	//		return nil, s.Wool.Wrapf(err, "cannot create sync communicate")
-	//	}
-	//	if s.sync == nil {
-	//		return nil, s.Errorf("sync: after new sync communicate == nil")
-	//	}
-	//	if len(s.syncRoutesQuestions) > 0 {
-	//		s.DebugMe("we need some communication!")
-	//		return &factoryv1.SyncResponse{NeedCommunication: true}, nil
-	//	} else {
-	//		return &factoryv1.SyncResponse{NeedCommunication: false}, nil
-	//	}
-	//}
-	//if s.sync == nil {
-	//	return nil, s.Errorf("sync: after sync == nil")
-	//}
-	//
-	//if state := s.sync.(*communicate.ClientContext); state != nil {
-	//	for i := range s.syncRoutesQuestions {
-	//		s.DebugMe("state: %v", state.Get())
-	//		confirm, err := state.SafeConfirm(i)
-	//		if err != nil {
-	//			return nil, s.Wool.Wrapf(err, "cannot get confirm")
-	//		}
-	//		expose := confirm.Confirmed
-	//		if expose {
-	//			route := s.syncRoutes[i]
-	//			s.DebugMe("exposing %s", route.Path)
-	//			err := route.Save(ctx, s.RoutesLocation)
-	//			if err != nil {
-	//				return nil, s.Wool.Wrapf(err, "cannot save route")
-	//			}
-	//		}
-	//	}
-	//}
-	//
-	//// Make sure the communication for create has been done successfully
-	//if !s.sync.Ready() {
-	//	return nil, s.Errorf("sync: validation communication not ready")
-	//}
-
+	s.Wool.Debug("states", wool.NullableField("answers", session.GetState()))
+	// Save the routes
+	for _, route := range s.syncRoutes {
+		expose, err := session.Confirm(route.Unique())
+		if err != nil {
+			return s.Factory.SyncError(err)
+		}
+		if expose {
+			err = route.Save(ctx, s.RoutesLocation)
+			if err != nil {
+				return s.Factory.SyncError(err)
+			}
+		}
+	}
 	return &factoryv1.SyncResponse{}, nil
 }
 
@@ -176,43 +199,43 @@ type DockerTemplating struct {
 func (s *Factory) Build(ctx context.Context, req *factoryv1.BuildRequest) (*factoryv1.BuildResponse, error) {
 	s.Wool.Debug("building docker image")
 	// We want to use DNS to create NetworkMapping
-	networkMapping, err := s.Network(req.DependenciesEndpoints)
-	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot create network mapping")
-	}
-	config, err := s.createConfig(ctx, networkMapping)
-	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot write config")
-	}
-
-	target := s.Local("codefly/builder/settings/routing.json")
-	err = os.WriteFile(target, config, 0o644)
-	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot write settings to %s", target)
-	}
-
-	err = os.Remove(s.Local("codefly/builder/Dockerfile"))
-	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot remove dockerfile")
-	}
-	err = s.Templates(nil, services.WithBuilder(builder))
-	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot copy and apply template")
-	}
-	builder, err := dockerhelpers.NewBuilder(dockerhelpers.BuilderConfiguration{
-		Root:       s.Location,
-		Dockerfile: "codefly/builder/Dockerfile",
-		Image:      s.DockerImage().Name,
-		Tag:        s.DockerImage().Tag,
-	})
-	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot create builder")
-	}
-	// builder.WithLogger(s.Wool)
-	_, err = builder.Build(ctx)
-	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot build image")
-	}
+	//networkMapping, err := s.Network(req.DependenciesEndpoints)
+	//if err != nil {
+	//	return nil, s.Wool.Wrapf(err, "cannot create network mapping")
+	//}
+	//config, err := s.createConfig(ctx, networkMapping)
+	//if err != nil {
+	//	return nil, s.Wool.Wrapf(err, "cannot write config")
+	//}
+	//
+	//target := s.Local("codefly/builder/settings/routing.json")
+	//err = os.WriteFile(target, config, 0o644)
+	//if err != nil {
+	//	return nil, s.Wool.Wrapf(err, "cannot write settings to %s", target)
+	//}
+	//
+	//err = os.Remove(s.Local("codefly/builder/Dockerfile"))
+	//if err != nil {
+	//	return nil, s.Wool.Wrapf(err, "cannot remove dockerfile")
+	//}
+	//err = s.Templates(nil, services.WithBuilder(builder))
+	//if err != nil {
+	//	return nil, s.Wool.Wrapf(err, "cannot copy and apply template")
+	//}
+	//builder, err := dockerhelpers.NewBuilder(dockerhelpers.BuilderConfiguration{
+	//	Root:       s.Location,
+	//	Dockerfile: "codefly/builder/Dockerfile",
+	//	Image:      s.DockerImage().Name,
+	//	Tag:        s.DockerImage().Tag,
+	//})
+	//if err != nil {
+	//	return nil, s.Wool.Wrapf(err, "cannot create builder")
+	//}
+	//// builder.WithLogger(s.Wool)
+	//_, err = builder.Build(ctx)
+	//if err != nil {
+	//	return nil, s.Wool.Wrapf(err, "cannot build image")
+	//}
 	return &factoryv1.BuildResponse{}, nil
 }
 
@@ -258,34 +281,6 @@ func (s *Factory) Network(es []*basev1.Endpoint) ([]*runtimev1.NetworkMapping, e
 	//	return nil, s.Wool.Wrapf(err, "cannot reserve ports")
 	//}
 	//return pm.NetworkMapping()
-}
-
-func (s *Factory) NewSyncCommunicate(routes []*configurations.RestRoute) error {
-	//s.DebugMe("adding new routes maybe #%d", len(routes))
-	//client, err := communicate.NewClientContext(ctx, communicate.Sync)
-	//if err != nil {
-	//	return s.Wool.Wrapf(err, "cannot create new client context")
-	//}
-	//// Set the state of sync communicate
-	//for _, route := range routes {
-	//	s.syncRoutes = append(s.syncRoutes, route)
-	//	fullPath := fmt.Sprintf("%s/%s%s", route.Application, route.Service, route.Path)
-	//	s.syncRoutesQuestions = append(s.syncRoutesQuestions,
-	//		client.NewConfirm(&agentsv1.Message{
-	//			Name:    fullPath,
-	//			Message: fmt.Sprintf("Want to expose %s: %v?", fullPath, route.Methods),
-	//		}, true))
-	//}
-	//s.seq, err = client.NewSequence(s.syncRoutesQuestions...)
-	//if err != nil {
-	//	return s.Wool.Wrapf(err, "can't create sequence")
-	//}
-	//s.sync = client
-	//err = s.Wire(communicate.Sync, client)
-	//if err != nil {
-	//	return s.Wool.Wrapf(err, "cannot wire")
-	//}
-	return nil
 }
 
 //go:embed templates/factory

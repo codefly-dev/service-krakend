@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"embed"
+	"github.com/codefly-dev/core/configurations/standards"
+	basev1 "github.com/codefly-dev/core/generated/go/base/v1"
+	"github.com/codefly-dev/core/runners"
 	"github.com/codefly-dev/core/templates"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -10,7 +13,6 @@ import (
 	"github.com/codefly-dev/core/agents"
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
-	basev1 "github.com/codefly-dev/core/generated/go/base/v1"
 	agentv1 "github.com/codefly-dev/core/generated/go/services/agent/v1"
 	"github.com/codefly-dev/core/shared"
 )
@@ -19,15 +21,17 @@ import (
 var agent = shared.Must(configurations.LoadFromFs[configurations.Agent](shared.Embed(info)))
 
 type Settings struct {
-	Debug bool `yaml:"debug"` // Developer only
+	Debug  bool `yaml:"debug"`  // Developer only
+	Public bool `yaml:"public"` // Accessible to external users
 }
+
+var image = runners.DockerImage{Name: "devopsfaith/krakend", Tag: "latest"}
 
 type Service struct {
 	*services.Base
 
 	// Access
-	Port     int
-	Endpoint *basev1.Endpoint
+	Port int
 
 	Routes         []*RestRoute
 	RoutesLocation string
@@ -44,6 +48,9 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv1.AgentInfor
 	}
 
 	return &agentv1.AgentInformation{
+		RuntimeRequirements: []*agentv1.RuntimeRequirement{
+			{Type: agentv1.RuntimeRequirement_DOCKER},
+		},
 		Capabilities: []*agentv1.Capability{
 			{Type: agentv1.Capability_FACTORY},
 			{Type: agentv1.Capability_RUNTIME},
@@ -73,11 +80,15 @@ func (s *Service) LoadRoutes(ctx context.Context) error {
 }
 
 func (s *Service) LoadEndpoints(ctx context.Context) error {
-	var err error
-	s.Endpoint, err = configurations.NewRestAPI(ctx, &configurations.Endpoint{Name: s.Identity.Name})
-	if err != nil {
-		return s.Wool.Wrapf(err, "cannot  create tcp endpoint")
+	visibility := configurations.VisibilityApplication
+	if s.Settings.Public {
+		visibility = configurations.VisibilityPublic
 	}
+	endpoint, err := configurations.NewRestAPI(ctx, &configurations.Endpoint{Name: standards.REST, API: standards.REST, Visibility: visibility})
+	if err != nil {
+		return s.Wool.Wrapf(err, "cannot  create rest endpoint")
+	}
+	s.Endpoints = []*basev1.Endpoint{endpoint}
 	return nil
 }
 

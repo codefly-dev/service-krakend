@@ -2,20 +2,21 @@ package main
 
 import (
 	"context"
-	"github.com/codefly-dev/core/configurations/standards"
-
+	"fmt"
 	"github.com/codefly-dev/core/agents/network"
 	"github.com/codefly-dev/core/configurations"
 	agentv1 "github.com/codefly-dev/core/generated/go/services/agent/v1"
 	runtimev1 "github.com/codefly-dev/core/generated/go/services/runtime/v1"
 	"github.com/codefly-dev/core/runners"
+	"github.com/codefly-dev/core/wool"
+	"strings"
 )
 
 type Runtime struct {
 	*Service
 
 	// internal
-	Runner *runners.Runner
+	Runner *runners.Docker
 }
 
 type Auth struct {
@@ -33,6 +34,7 @@ func NewRuntime() *Runtime {
 
 func (s *Runtime) Load(ctx context.Context, req *runtimev1.LoadRequest) (*runtimev1.LoadResponse, error) {
 	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
 
 	err := s.Base.Load(ctx, req.Identity, s.Settings)
 	if err != nil {
@@ -41,7 +43,7 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev1.LoadRequest) (*runtim
 
 	s.RoutesLocation = s.Local("routing")
 
-	s.Endpoint, err = configurations.NewRestAPI(ctx, &configurations.Endpoint{Name: s.Identity.Name, API: standards.REST, Visibility: "public"})
+	err = s.LoadEndpoints(ctx)
 	if err != nil {
 		return s.Base.Runtime.LoadError(err)
 	}
@@ -57,45 +59,61 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev1.LoadRequest) (*runtim
 
 func (s *Runtime) Init(ctx context.Context, req *runtimev1.InitRequest) (*runtimev1.InitResponse, error) {
 	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
 
 	var err error
 	s.NetworkMappings, err = s.Network(ctx)
 	if err != nil {
-		return s.Base.Runtime.InitError(err)
+		return s.Runtime.InitError(err)
+	}
+	// for docker version
+	s.Port = 80
+
+	address := s.NetworkMappings[0].Addresses[0]
+	port := strings.Split(address, ":")[1]
+
+	// Run Docker
+	s.Runner, err = runners.NewDocker(ctx, runners.WithWorkspace(s.Location))
+	if err != nil {
+		return s.Runtime.InitError(err)
 	}
 
+	s.Runner.WithPorts(runners.DockerPort{Container: fmt.Sprintf("%d", s.Port), Host: port})
+
+	err = s.Runner.Init(ctx, image)
+	if err != nil {
+		return s.Runtime.InitError(err)
+	}
 	return s.Base.Runtime.InitResponse()
 }
 
 func (s *Runtime) Start(ctx context.Context, req *runtimev1.StartRequest) (*runtimev1.StartResponse, error) {
 	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
 
-	err := s.writeConfig(ctx, req.NetworkMappings)
+	s.Wool.Debug("starting runtime", wool.NullableField("network mappings", network.MakeNetworkMappingSummary(req.NetworkMappings)))
+
+	// For docker, replace localhost by host.docker.internal
+	nm := network.LocalizeMappings(req.NetworkMappings, "host.docker.internal")
+	err := s.writeConfig(ctx, nm)
 	if err != nil {
 		return s.Runtime.StartError(err)
 	}
 
 	envs := []string{
 		"FC_ENABLE=1",
-		"FC_OUT=" + s.Local("out.json"),
-		"FC_SETTINGS=" + s.Local("config/settings"),
+		"FC_OUT=out.json",
+		"FC_SETTINGS=config/settings",
 	}
 
-	s.Runner = &runners.Runner{
-		Name:  s.Base.Identity.Name,
-		Bin:   "krakend",
-		Args:  []string{"run", "-d", "-c", s.Local("config/krakend.tmpl")},
-		Envs:  envs,
-		Dir:   s.Location,
-		Debug: true,
-	}
+	run := runners.NewCommand("krakend", "run", "-d", "-c", "config/krakend.tmpl").WithEnvs(envs)
 
-	_, err = s.Runner.Run(context.Background())
+	err = s.Runner.Start(ctx, run)
 	if err != nil {
 		return s.Runtime.StartError(err)
 	}
 
-	return s.Runtime.StartResponse(nil)
+	return s.Runtime.StartResponse()
 }
 
 func (s *Runtime) Information(ctx context.Context, req *runtimev1.InformationRequest) (*runtimev1.InformationResponse, error) {
@@ -106,12 +124,13 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev1.StopRequest) (*runtim
 	defer s.Wool.Catch()
 
 	s.Wool.Debug("stopping service")
-	//err := s.Runner.Kill(ctx)
-	//if err != nil {
-	//	return nil, s.Wool.Wrapf(err, "cannot kill go")
-	//}
 
-	err := s.Base.Stop()
+	err := s.Runner.Stop()
+	if err != nil {
+		return nil, s.Wool.Wrapf(err, "cannot stop runner")
+	}
+
+	err = s.Base.Stop()
 	if err != nil {
 		return nil, err
 	}
@@ -127,11 +146,12 @@ func (s *Runtime) Communicate(ctx context.Context, req *agentv1.Engage) (*agentv
  */
 
 func (s *Runtime) Network(ctx context.Context) ([]*runtimev1.NetworkMapping, error) {
+	endpoint := s.Endpoints[0]
 	pm, err := network.NewServicePortManager(ctx, s.Identity)
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot create network manager")
 	}
-	err = pm.Expose(s.Endpoint)
+	err = pm.Expose(endpoint)
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot add grpc endpoint to network manager")
 	}
@@ -139,7 +159,7 @@ func (s *Runtime) Network(ctx context.Context) ([]*runtimev1.NetworkMapping, err
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot reserve ports")
 	}
-	s.Port, err = pm.Port(ctx, s.Endpoint)
+	s.Port, err = pm.Port(ctx, endpoint)
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot get port")
 	}
