@@ -7,10 +7,10 @@ import (
 	"github.com/codefly-dev/core/agents/communicate"
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
-	basev1 "github.com/codefly-dev/core/generated/go/base/v1"
-	agentv1 "github.com/codefly-dev/core/generated/go/services/agent/v1"
-	factoryv1 "github.com/codefly-dev/core/generated/go/services/factory/v1"
-	runtimev1 "github.com/codefly-dev/core/generated/go/services/runtime/v1"
+	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
+	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
+	factoryv0 "github.com/codefly-dev/core/generated/go/services/factory/v0"
+	runtimev0 "github.com/codefly-dev/core/generated/go/services/runtime/v0"
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/templates"
 	"github.com/codefly-dev/core/wool"
@@ -28,7 +28,7 @@ func NewFactory() *Factory {
 	}
 }
 
-func (s *Factory) Load(ctx context.Context, req *factoryv1.LoadRequest) (*factoryv1.LoadResponse, error) {
+func (s *Factory) Load(ctx context.Context, req *factoryv0.LoadRequest) (*factoryv0.LoadResponse, error) {
 	defer s.Wool.Catch()
 
 	err := s.Base.Load(ctx, req.Identity, s.Settings)
@@ -58,7 +58,7 @@ func (s *Factory) Load(ctx context.Context, req *factoryv1.LoadRequest) (*factor
 	}
 
 	// communication on Sync
-	err = s.Communication.Register(ctx, communicate.New[factoryv1.CreateRequest](createCommunicate()))
+	err = s.Communication.Register(ctx, communicate.New[factoryv0.CreateRequest](createCommunicate()))
 	if err != nil {
 		return s.Factory.LoadError(err)
 	}
@@ -70,14 +70,14 @@ const Public = "public"
 
 func createCommunicate() *communicate.Sequence {
 	return communicate.NewSequence(
-		communicate.NewConfirm(&agentv1.Message{Name: Public, Message: "Public API?", Description: "Exposed to external users"}, false),
+		communicate.NewConfirm(&agentv0.Message{Name: Public, Message: "Public API?", Description: "Exposed to external users"}, false),
 	)
 }
 
-func (s *Factory) Create(ctx context.Context, req *factoryv1.CreateRequest) (*factoryv1.CreateResponse, error) {
+func (s *Factory) Create(ctx context.Context, req *factoryv0.CreateRequest) (*factoryv0.CreateResponse, error) {
 	defer s.Wool.Catch()
 
-	session, err := s.Communication.Done(ctx, communicate.Channel[factoryv1.CreateRequest]())
+	session, err := s.Communication.Done(ctx, communicate.Channel[factoryv0.CreateRequest]())
 	if err != nil {
 		return s.Factory.CreateError(err)
 	}
@@ -99,8 +99,9 @@ func (s *Factory) Create(ctx context.Context, req *factoryv1.CreateRequest) (*fa
 	return s.Base.Factory.CreateResponse(ctx, s.Settings, s.Endpoints...)
 }
 
-func (s *Factory) Init(ctx context.Context, req *factoryv1.InitRequest) (*factoryv1.InitResponse, error) {
+func (s *Factory) Init(ctx context.Context, req *factoryv0.InitRequest) (*factoryv0.InitResponse, error) {
 	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
 
 	s.DependencyEndpoints = req.DependenciesEndpoints
 
@@ -110,13 +111,18 @@ func (s *Factory) Init(ctx context.Context, req *factoryv1.InitRequest) (*factor
 		return s.Factory.InitError(err)
 	}
 
-	return s.Factory.InitResponse()
+	hash, err := requirements.Hash(ctx)
+	if err != nil {
+		return s.Factory.InitError(err)
+	}
+
+	return s.Factory.InitResponse(hash)
 }
 
-func (s *Factory) Update(ctx context.Context, req *factoryv1.UpdateRequest) (*factoryv1.UpdateResponse, error) {
+func (s *Factory) Update(ctx context.Context, req *factoryv0.UpdateRequest) (*factoryv0.UpdateResponse, error) {
 	defer s.Wool.Catch()
 
-	return &factoryv1.UpdateResponse{}, nil
+	return &factoryv0.UpdateResponse{}, nil
 }
 
 func (s *Factory) UpdateAvailableRoutes(ctx context.Context) error {
@@ -144,7 +150,7 @@ func (s *Factory) UpdateAvailableRoutes(ctx context.Context) error {
 	s.Wool.Info("found new routes", wool.SliceCountField(s.syncRoutes))
 
 	// register communication for Sync
-	err := s.Communication.Register(ctx, communicate.New[factoryv1.SyncRequest](s.syncRoutesQuestions()))
+	err := s.Communication.Register(ctx, communicate.New[factoryv0.SyncRequest](s.syncRoutesQuestions()))
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot communicate for sync")
 	}
@@ -153,20 +159,20 @@ func (s *Factory) UpdateAvailableRoutes(ctx context.Context) error {
 }
 
 func (s *Factory) syncRoutesQuestions() *communicate.Sequence {
-	var questions []*agentv1.Question
+	var questions []*agentv0.Question
 	for _, route := range s.syncRoutes {
-		questions = append(questions, communicate.NewConfirm(&agentv1.Message{Name: route.Unique(),
+		questions = append(questions, communicate.NewConfirm(&agentv0.Message{Name: route.Unique(),
 			Message:     fmt.Sprintf("Want to expose REST route: %s for service <%s> from application <%s>", route.Path, route.Service, route.Application),
 			Description: fmt.Sprintf("Corresponding route on the API will be %s", route.Unique())}, true))
 	}
 	return communicate.NewSequence(questions...)
 }
 
-func (s *Factory) Sync(ctx context.Context, req *factoryv1.SyncRequest) (*factoryv1.SyncResponse, error) {
+func (s *Factory) Sync(ctx context.Context, req *factoryv0.SyncRequest) (*factoryv0.SyncResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	session, err := s.Communication.Done(ctx, communicate.Channel[factoryv1.SyncRequest]())
+	session, err := s.Communication.Done(ctx, communicate.Channel[factoryv0.SyncRequest]())
 	if err != nil {
 		return s.Factory.SyncError(err)
 	}
@@ -184,7 +190,7 @@ func (s *Factory) Sync(ctx context.Context, req *factoryv1.SyncRequest) (*factor
 			}
 		}
 	}
-	return &factoryv1.SyncResponse{}, nil
+	return &factoryv0.SyncResponse{}, nil
 }
 
 type Env struct {
@@ -196,7 +202,7 @@ type DockerTemplating struct {
 	Envs []Env
 }
 
-func (s *Factory) Build(ctx context.Context, req *factoryv1.BuildRequest) (*factoryv1.BuildResponse, error) {
+func (s *Factory) Build(ctx context.Context, req *factoryv0.BuildRequest) (*factoryv0.BuildResponse, error) {
 	s.Wool.Debug("building docker image")
 	// We want to use DNS to create NetworkMapping
 	//networkMapping, err := s.Network(req.DependenciesEndpoints)
@@ -236,7 +242,7 @@ func (s *Factory) Build(ctx context.Context, req *factoryv1.BuildRequest) (*fact
 	//if err != nil {
 	//	return nil, s.Wool.Wrapf(err, "cannot build image")
 	//}
-	return &factoryv1.BuildResponse{}, nil
+	return &factoryv0.BuildResponse{}, nil
 }
 
 type Deployment struct {
@@ -249,7 +255,7 @@ type DeploymentParameter struct {
 	Deployment
 }
 
-func (s *Factory) Deploy(ctx context.Context, req *factoryv1.DeploymentRequest) (*factoryv1.DeploymentResponse, error) {
+func (s *Factory) Deploy(ctx context.Context, req *factoryv0.DeploymentRequest) (*factoryv0.DeploymentResponse, error) {
 	defer s.Wool.Catch()
 	//deploy := DeploymentParameter{Image: s.DockerImage(), Information: s.Information, Deployment: Deployment{Replicas: 1}}
 	//err := s.Templates(deploy,
@@ -260,10 +266,10 @@ func (s *Factory) Deploy(ctx context.Context, req *factoryv1.DeploymentRequest) 
 	//if err != nil {
 	//	return nil, err
 	//}
-	return &factoryv1.DeploymentResponse{}, nil
+	return &factoryv0.DeploymentResponse{}, nil
 }
 
-func (s *Factory) Network(es []*basev1.Endpoint) ([]*runtimev1.NetworkMapping, error) {
+func (s *Factory) Network(es []*basev0.Endpoint) ([]*runtimev0.NetworkMapping, error) {
 	return nil, nil
 	//s.DebugMe("in network: %v", configurations.Condensed(es))
 	//pm, err := network.NewServiceDnsManager(ctx, s.Identity)

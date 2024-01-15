@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"github.com/codefly-dev/core/agents/network"
 	"github.com/codefly-dev/core/configurations"
-	agentv1 "github.com/codefly-dev/core/generated/go/services/agent/v1"
-	runtimev1 "github.com/codefly-dev/core/generated/go/services/runtime/v1"
+	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
+	runtimev0 "github.com/codefly-dev/core/generated/go/services/runtime/v0"
 	"github.com/codefly-dev/core/runners"
 	"github.com/codefly-dev/core/wool"
 	"strings"
@@ -32,7 +32,7 @@ func NewRuntime() *Runtime {
 	}
 }
 
-func (s *Runtime) Load(ctx context.Context, req *runtimev1.LoadRequest) (*runtimev1.LoadResponse, error) {
+func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtimev0.LoadResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
@@ -57,7 +57,7 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev1.LoadRequest) (*runtim
 	return s.Base.Runtime.LoadResponse(s.Endpoints)
 }
 
-func (s *Runtime) Init(ctx context.Context, req *runtimev1.InitRequest) (*runtimev1.InitResponse, error) {
+func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtimev0.InitResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
@@ -78,7 +78,18 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev1.InitRequest) (*runtim
 		return s.Runtime.InitError(err)
 	}
 
-	s.Runner.WithPorts(runners.DockerPort{Container: fmt.Sprintf("%d", s.Port), Host: port})
+	s.Runner.WithPort(runners.DockerPort{Container: fmt.Sprintf("%d", s.Port), Host: port})
+
+	envs := []string{
+		"FC_ENABLE=1",
+		"FC_OUT=out.json",
+		"FC_SETTINGS=config/settings",
+	}
+
+	s.Runner.WithEnvironmentVariables(envs...)
+
+	cmd := []string{"krakend", "run", "-d", "-c", "config/krakend.tmpl"}
+	s.Runner.WithCommand(cmd...)
 
 	err = s.Runner.Init(ctx, image)
 	if err != nil {
@@ -87,7 +98,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev1.InitRequest) (*runtim
 	return s.Base.Runtime.InitResponse()
 }
 
-func (s *Runtime) Start(ctx context.Context, req *runtimev1.StartRequest) (*runtimev1.StartResponse, error) {
+func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runtimev0.StartResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
@@ -100,15 +111,7 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev1.StartRequest) (*runt
 		return s.Runtime.StartError(err)
 	}
 
-	envs := []string{
-		"FC_ENABLE=1",
-		"FC_OUT=out.json",
-		"FC_SETTINGS=config/settings",
-	}
-
-	run := runners.NewCommand("krakend", "run", "-d", "-c", "config/krakend.tmpl").WithEnvs(envs)
-
-	err = s.Runner.Start(ctx, run)
+	err = s.Runner.Start(ctx)
 	if err != nil {
 		return s.Runtime.StartError(err)
 	}
@@ -116,11 +119,11 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev1.StartRequest) (*runt
 	return s.Runtime.StartResponse()
 }
 
-func (s *Runtime) Information(ctx context.Context, req *runtimev1.InformationRequest) (*runtimev1.InformationResponse, error) {
-	return &runtimev1.InformationResponse{}, nil
+func (s *Runtime) Information(ctx context.Context, req *runtimev0.InformationRequest) (*runtimev0.InformationResponse, error) {
+	return &runtimev0.InformationResponse{}, nil
 }
 
-func (s *Runtime) Stop(ctx context.Context, req *runtimev1.StopRequest) (*runtimev1.StopResponse, error) {
+func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtimev0.StopResponse, error) {
 	defer s.Wool.Catch()
 
 	s.Wool.Debug("stopping service")
@@ -134,10 +137,10 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev1.StopRequest) (*runtim
 	if err != nil {
 		return nil, err
 	}
-	return &runtimev1.StopResponse{}, nil
+	return &runtimev0.StopResponse{}, nil
 }
 
-func (s *Runtime) Communicate(ctx context.Context, req *agentv1.Engage) (*agentv1.InformationRequest, error) {
+func (s *Runtime) Communicate(ctx context.Context, req *agentv0.Engage) (*agentv0.InformationRequest, error) {
 	return s.Base.Communicate(ctx, req)
 }
 
@@ -145,7 +148,7 @@ func (s *Runtime) Communicate(ctx context.Context, req *agentv1.Engage) (*agentv
 
  */
 
-func (s *Runtime) Network(ctx context.Context) ([]*runtimev1.NetworkMapping, error) {
+func (s *Runtime) Network(ctx context.Context) ([]*runtimev0.NetworkMapping, error) {
 	endpoint := s.Endpoints[0]
 	pm, err := network.NewServicePortManager(ctx, s.Identity)
 	if err != nil {

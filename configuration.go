@@ -9,7 +9,7 @@ import (
 
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
-	runtimev1 "github.com/codefly-dev/core/generated/go/services/runtime/v1"
+	runtimev0 "github.com/codefly-dev/core/generated/go/services/runtime/v0"
 	"github.com/codefly-dev/core/shared"
 )
 
@@ -82,7 +82,7 @@ func gatewayTarget(r *configurations.RestRoute) string {
 	return fmt.Sprintf("/%s/%s%s", r.Application, r.Service, r.Path)
 }
 
-func (s *Service) writeConfig(ctx context.Context, nms []*runtimev1.NetworkMapping) error {
+func (s *Service) writeConfig(ctx context.Context, nms []*runtimev0.NetworkMapping) error {
 	config, err := s.createConfig(ctx, nms)
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot create config")
@@ -95,7 +95,7 @@ func (s *Service) writeConfig(ctx context.Context, nms []*runtimev1.NetworkMappi
 	return nil
 }
 
-func (s *Service) createConfig(ctx context.Context, nms []*runtimev1.NetworkMapping) ([]byte, error) {
+func (s *Service) createConfig(ctx context.Context, nms []*runtimev0.NetworkMapping) ([]byte, error) {
 	// Write the main config
 	err := shared.Embed(config).Copy("templates/krakend.config", s.Local("config/krakend.tmpl"))
 	if err != nil {
