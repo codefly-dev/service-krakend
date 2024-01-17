@@ -16,7 +16,8 @@ type Runtime struct {
 	*Service
 
 	// internal
-	Runner *runners.Docker
+	Runner  *runners.Docker
+	Address string
 }
 
 type Auth struct {
@@ -43,7 +44,7 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 
 	s.RoutesLocation = s.Local("routing")
 
-	err = s.LoadEndpoints(ctx)
+	err = s.LoadEndpoint(ctx)
 	if err != nil {
 		return s.Base.Runtime.LoadError(err)
 	}
@@ -54,7 +55,7 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 		return s.Base.Runtime.LoadError(err)
 	}
 
-	return s.Base.Runtime.LoadResponse(s.Endpoints)
+	return s.Base.Runtime.LoadResponse()
 }
 
 func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtimev0.InitResponse, error) {
@@ -62,16 +63,22 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	ctx = s.Wool.Inject(ctx)
 
 	var err error
-	s.NetworkMappings, err = s.Network(ctx)
+	s.NetworkMappings, err = s.CustomNetwork(ctx)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
+
 	// for docker version
 	s.Port = 80
 
 	address := s.NetworkMappings[0].Addresses[0]
+	s.Address = address
 	port := strings.Split(address, ":")[1]
 
+	s.Validator, err = s.CreateValidator(ctx, req.ProviderInfos)
+	if err != nil {
+		return s.Runtime.InitError(err)
+	}
 	// Run Docker
 	s.Runner, err = runners.NewDocker(ctx, runners.WithWorkspace(s.Location))
 	if err != nil {
@@ -101,6 +108,8 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runtimev0.StartResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
+
+	_, _ = s.Wool.Forward([]byte(fmt.Sprintf("running on: %s", s.Address)))
 
 	s.Wool.Debug("starting runtime", wool.NullableField("network mappings", network.MakeNetworkMappingSummary(req.NetworkMappings)))
 
@@ -148,9 +157,9 @@ func (s *Runtime) Communicate(ctx context.Context, req *agentv0.Engage) (*agentv
 
  */
 
-func (s *Runtime) Network(ctx context.Context) ([]*runtimev0.NetworkMapping, error) {
+func (s *Runtime) CustomNetwork(ctx context.Context) ([]*runtimev0.NetworkMapping, error) {
 	endpoint := s.Endpoints[0]
-	pm, err := network.NewServicePortManager(ctx, s.Identity)
+	pm, err := network.NewServicePortManager(ctx)
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot create network manager")
 	}

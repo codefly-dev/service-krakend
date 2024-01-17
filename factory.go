@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"github.com/codefly-dev/core/agents/communicate"
+	dockerhelpers "github.com/codefly-dev/core/agents/helpers/docker"
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
 	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
@@ -14,6 +15,7 @@ import (
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/templates"
 	"github.com/codefly-dev/core/wool"
+	"os"
 )
 
 type Factory struct {
@@ -42,12 +44,12 @@ func (s *Factory) Load(ctx context.Context, req *factoryv0.LoadRequest) (*factor
 		return s.Factory.LoadError(err)
 	}
 
-	err = s.LoadRoutes(ctx)
+	err = s.LoadEndpoint(ctx)
 	if err != nil {
 		return s.Factory.LoadError(err)
 	}
 
-	err = s.LoadEndpoints(ctx)
+	err = s.LoadRoutes(ctx)
 	if err != nil {
 		return s.Factory.LoadError(err)
 	}
@@ -63,7 +65,7 @@ func (s *Factory) Load(ctx context.Context, req *factoryv0.LoadRequest) (*factor
 		return s.Factory.LoadError(err)
 	}
 
-	return s.Factory.LoadResponse(s.Endpoints, gettingStarted)
+	return s.Factory.LoadResponse(gettingStarted)
 }
 
 const Public = "public"
@@ -91,12 +93,7 @@ func (s *Factory) Create(ctx context.Context, req *factoryv0.CreateRequest) (*fa
 		return nil, err
 	}
 
-	err = s.LoadEndpoints(ctx)
-	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot create endpoints")
-	}
-
-	return s.Base.Factory.CreateResponse(ctx, s.Settings, s.Endpoints...)
+	return s.Base.Factory.CreateResponse(ctx, s.Settings)
 }
 
 func (s *Factory) Init(ctx context.Context, req *factoryv0.InitRequest) (*factoryv0.InitResponse, error) {
@@ -147,7 +144,7 @@ func (s *Factory) UpdateAvailableRoutes(ctx context.Context) error {
 	if len(s.syncRoutes) == 0 {
 		return nil
 	}
-	s.Wool.Info("found new routes", wool.SliceCountField(s.syncRoutes))
+	s.Wool.Debug("found new routes", wool.SliceCountField(s.syncRoutes))
 
 	// register communication for Sync
 	err := s.Communication.Register(ctx, communicate.New[factoryv0.SyncRequest](s.syncRoutesQuestions()))
@@ -176,6 +173,9 @@ func (s *Factory) Sync(ctx context.Context, req *factoryv0.SyncRequest) (*factor
 	if err != nil {
 		return s.Factory.SyncError(err)
 	}
+	if session == nil {
+		return &factoryv0.SyncResponse{}, nil
+	}
 	s.Wool.Debug("states", wool.NullableField("answers", session.GetState()))
 	// Save the routes
 	for _, route := range s.syncRoutes {
@@ -189,6 +189,25 @@ func (s *Factory) Sync(ctx context.Context, req *factoryv0.SyncRequest) (*factor
 				return s.Factory.SyncError(err)
 			}
 		}
+	}
+	// Get all the routes
+	err = s.LoadRoutes(ctx)
+	if err != nil {
+		return s.Factory.SyncError(err)
+	}
+	combinator, err := configurations.NewOpenAPICombinator(ctx, configurations.FromProtoEndpoint(s.endpoint), s.DependencyEndpoints...)
+	if err != nil {
+		return s.Factory.SyncError(err)
+	}
+	combinator.WithDestination(s.Local("swagger.json"))
+	combinator.WithVersion(s.Configuration.Version)
+	for _, route := range s.Routes {
+		s.Wool.Focus("EXPOSING", wool.Field("route", route))
+		combinator.Only(route.ServiceUnique(), route.Path)
+	}
+	_, err = combinator.Combine(ctx)
+	if err != nil {
+		return s.Factory.SyncError(err)
 	}
 	return &factoryv0.SyncResponse{}, nil
 }
@@ -204,44 +223,39 @@ type DockerTemplating struct {
 
 func (s *Factory) Build(ctx context.Context, req *factoryv0.BuildRequest) (*factoryv0.BuildResponse, error) {
 	s.Wool.Debug("building docker image")
+	docker := DockerTemplating{}
 	// We want to use DNS to create NetworkMapping
-	//networkMapping, err := s.Network(req.DependenciesEndpoints)
-	//if err != nil {
-	//	return nil, s.Wool.Wrapf(err, "cannot create network mapping")
-	//}
-	//config, err := s.createConfig(ctx, networkMapping)
-	//if err != nil {
-	//	return nil, s.Wool.Wrapf(err, "cannot write config")
-	//}
-	//
-	//target := s.Local("codefly/builder/settings/routing.json")
-	//err = os.WriteFile(target, config, 0o644)
-	//if err != nil {
-	//	return nil, s.Wool.Wrapf(err, "cannot write settings to %s", target)
-	//}
-	//
-	//err = os.Remove(s.Local("codefly/builder/Dockerfile"))
-	//if err != nil {
-	//	return nil, s.Wool.Wrapf(err, "cannot remove dockerfile")
-	//}
-	//err = s.Templates(nil, services.WithBuilder(builder))
-	//if err != nil {
-	//	return nil, s.Wool.Wrapf(err, "cannot copy and apply template")
-	//}
-	//builder, err := dockerhelpers.NewBuilder(dockerhelpers.BuilderConfiguration{
-	//	Root:       s.Location,
-	//	Dockerfile: "codefly/builder/Dockerfile",
-	//	Image:      s.DockerImage().Name,
-	//	Tag:        s.DockerImage().Tag,
-	//})
-	//if err != nil {
-	//	return nil, s.Wool.Wrapf(err, "cannot create builder")
-	//}
-	//// builder.WithLogger(s.Wool)
-	//_, err = builder.Build(ctx)
-	//if err != nil {
-	//	return nil, s.Wool.Wrapf(err, "cannot build image")
-	//}
+	networkMapping, err := s.Network(req.DependenciesEndpoints)
+	if err != nil {
+		return nil, s.Wool.Wrapf(err, "cannot create network mapping")
+	}
+	conf, err := s.createConfig(ctx, networkMapping)
+	if err != nil {
+		return nil, s.Wool.Wrapf(err, "cannot write config")
+	}
+
+	target := s.Local("codefly/builder/routing.json")
+	err = os.WriteFile(target, conf, 0o644)
+	if err != nil {
+		return nil, s.Wool.Wrapf(err, "cannot write settings to %s", target)
+	}
+	err = s.Templates(ctx, docker, services.WithBuilder(builder))
+	if err != nil {
+		return nil, s.Wool.Wrapf(err, "cannot copy and apply template")
+	}
+
+	build, err := dockerhelpers.NewBuilder(dockerhelpers.BuilderConfiguration{
+		Root:        s.Location,
+		Dockerfile:  "codefly/builder/Dockerfile",
+		Destination: s.DockerImage(),
+	})
+	if err != nil {
+		return nil, s.Wool.Wrapf(err, "cannot create builder")
+	}
+	_, err = build.Build(ctx)
+	if err != nil {
+		return nil, s.Wool.Wrapf(err, "cannot build image")
+	}
 	return &factoryv0.BuildResponse{}, nil
 }
 

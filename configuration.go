@@ -26,32 +26,31 @@ type Backend struct {
 	Hosts []string `json:"hosts"`
 }
 
+type InputHeaders struct {
+	Headers []string `json:"headers"`
+}
+
 type Forwarding struct {
-	Target      string         `json:"target"`
-	Backend     Backend        `json:"backend"`
-	ExtraConfig map[string]any `json:"extra_config"`
+	Target       string         `json:"target"`
+	InputHeaders []string       `json:"input_headers"`
+	Backend      Backend        `json:"backend"`
+	ExtraConfig  map[string]any `json:"extra_config"`
 }
 
 // AuthValidatorKey for auth
 const AuthValidatorKey = "auth/validator"
 
 type AuthValidator struct {
-	Alg      string   `json:"alg,omitempty"`
-	Audience []string `json:"audience,omitempty"`
-	JwkURL   string   `json:"jwk_url,omitempty"`
-	Issuer   string   `json:"issuer,omitempty"`
+	Alg             string     `json:"alg,omitempty"`
+	Audience        []string   `json:"audience,omitempty"`
+	JwkURL          string     `json:"jwk_url,omitempty"`
+	Cache           bool       `json:"cache,omitempty"`
+	Roles           []string   `json:"roles,omitempty"`
+	PropagateClaims [][]string `json:"propagate-claims,omitempty"`
 }
 
-func Protect(config *Forwarding) {
-	if config.ExtraConfig == nil {
-		config.ExtraConfig = make(map[string]any)
-	}
-	config.ExtraConfig[AuthValidatorKey] = AuthValidator{
-		Alg:      "RS256",
-		Audience: []string{"https://codefly.ai"},
-		JwkURL:   "https://dev-4c24vdpgjj3eyqmy.us.auth0.com/.well-known/jwks.json",
-		Issuer:   "https://dev-4c24vdpgjj3eyqmy.us.auth0.com/",
-	}
+func Protect(config *Forwarding, validator *AuthValidator) {
+	config.ExtraConfig[AuthValidatorKey] = *validator
 }
 
 type CorsPolicy struct {
@@ -66,16 +65,14 @@ type CorsPolicy struct {
 const CorsPolicyRouteKey = "github.com/devopsfaith/krakend-cors"
 const CorsPolicyKey = "security/cors"
 
-func Cors(key string) map[string]any {
-	config := make(map[string]any)
-	config[key] = CorsPolicy{
+func Cors(key string) CorsPolicy {
+	return CorsPolicy{
 		AllowOrigins:  []string{"*"},
 		AllowMethods:  []string{"GET", "POST", "PUT", "DELETE"},
 		AllowHeaders:  []string{"Content-Type", "Origin", "Authorization", "Accept"},
 		ExposeHeaders: []string{"Content-Length", "Content-Type"},
 		MaxAge:        "12h",
 	}
-	return config
 }
 
 func gatewayTarget(r *configurations.RestRoute) string {
@@ -83,16 +80,23 @@ func gatewayTarget(r *configurations.RestRoute) string {
 }
 
 func (s *Service) writeConfig(ctx context.Context, nms []*runtimev0.NetworkMapping) error {
-	config, err := s.createConfig(ctx, nms)
+	conf, err := s.createConfig(ctx, nms)
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot create config")
 	}
 	target := s.Local("config/settings/routing.json")
-	err = os.WriteFile(target, config, 0o644)
+	err = os.WriteFile(target, conf, 0o644)
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot write settings to %s", target)
 	}
 	return nil
+}
+
+const TelemetryKey = "telemetry/logging"
+
+type TelemetryLogging struct {
+	Level  string `json:"level,omitempty"`
+	StdOut bool   `json:"stdout,omitempty"`
 }
 
 func (s *Service) createConfig(ctx context.Context, nms []*runtimev0.NetworkMapping) ([]byte, error) {
@@ -102,9 +106,10 @@ func (s *Service) createConfig(ctx context.Context, nms []*runtimev0.NetworkMapp
 		return nil, s.Wool.Wrapf(err, "cannot copy config")
 	}
 
-	settings := KrakendSettings{Port: s.Port}
+	settings := KrakendSettings{Port: s.Port, ExtraConfig: make(map[string]any)}
 	// setup CORS configuration globally
-	settings.ExtraConfig = Cors(CorsPolicyKey)
+	settings.ExtraConfig[CorsPolicyKey] = Cors(CorsPolicyKey)
+	settings.ExtraConfig[TelemetryKey] = TelemetryLogging{Level: "DEBUG", StdOut: true}
 
 	for _, route := range s.Routes {
 		nm, err := services.NetworkMappingForRoute(ctx, &route.RestRoute, nms)
@@ -115,15 +120,10 @@ func (s *Service) createConfig(ctx context.Context, nms []*runtimev0.NetworkMapp
 		for _, h := range nm.Addresses {
 			hosts = append(hosts, fmt.Sprintf("http://%s", h))
 		}
-		fwd := Forwarding{
-			Target: gatewayTarget(&route.RestRoute),
-			Backend: Backend{
-				URL:   route.Path,
-				Hosts: hosts,
-			},
-		}
+		fwd := NewForwarding(gatewayTarget(&route.RestRoute), route.Path, hosts)
 		if route.Extension.Protected {
-			Protect(&fwd)
+			fwd.InputHeaders = []string{"*"}
+			Protect(&fwd, s.Validator)
 		}
 		settings.Group = append(settings.Group, fwd)
 		break
@@ -134,6 +134,17 @@ func (s *Service) createConfig(ctx context.Context, nms []*runtimev0.NetworkMapp
 		return nil, s.Wool.Wrapf(err, "cannot marshal settings")
 	}
 	return content, nil
+}
+
+func NewForwarding(target string, path string, hosts []string) Forwarding {
+	return Forwarding{
+		Target: target,
+		Backend: Backend{
+			URL:   path,
+			Hosts: hosts,
+		},
+		ExtraConfig: make(map[string]any),
+	}
 }
 
 //go:embed templates/krakend.config

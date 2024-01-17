@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"fmt"
 	"github.com/codefly-dev/core/builders"
 	"github.com/codefly-dev/core/configurations/standards"
 	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
@@ -33,11 +34,14 @@ var image = runners.DockerImage{Name: "devopsfaith/krakend", Tag: "latest"}
 type Service struct {
 	*services.Base
 
+	endpoint *basev0.Endpoint
+
 	// Access
 	Port int
 
 	Routes         []*RestRoute
 	RoutesLocation string
+	Validator      *AuthValidator
 
 	// Settings
 	*Settings
@@ -82,17 +86,50 @@ func (s *Service) LoadRoutes(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) LoadEndpoints(ctx context.Context) error {
+func (s *Service) LoadEndpoint(ctx context.Context) error {
 	visibility := configurations.VisibilityApplication
 	if s.Settings.Public {
 		visibility = configurations.VisibilityPublic
 	}
-	endpoint, err := configurations.NewRestAPI(ctx, &configurations.Endpoint{Name: standards.REST, API: standards.REST, Visibility: visibility})
-	if err != nil {
-		return s.Wool.Wrapf(err, "cannot  create rest endpoint")
+	var err error
+	if shared.FileExists(s.Local("swagger.json")) {
+		s.endpoint, err = configurations.NewRestAPIFromOpenAPI(ctx, &configurations.Endpoint{Name: standards.REST, API: standards.REST, Visibility: visibility}, s.Local("swagger.json"))
+		if err != nil {
+			return s.Wool.Wrapf(err, "cannot  create rest endpoint")
+		}
+	} else {
+		s.endpoint, err = configurations.NewRestAPI(ctx, &configurations.Endpoint{Name: standards.REST, API: standards.REST, Visibility: visibility})
+		if err != nil {
+			return s.Wool.Wrapf(err, "cannot  create rest endpoint")
+		}
 	}
-	s.Endpoints = []*basev0.Endpoint{endpoint}
+	s.endpoint.Application = s.Configuration.Application
+	s.endpoint.Service = s.Configuration.Name
+	s.Endpoints = []*basev0.Endpoint{s.endpoint}
 	return nil
+}
+
+const Auth0 = "auth0"
+
+func (s *Service) CreateValidator(ctx context.Context, provs []*basev0.ProviderInformation) (*AuthValidator, error) {
+	// Validator
+	for _, prov := range s.Configuration.ProviderDependencies {
+		validator, err := configurations.GetProjectProvider(prov, provs)
+		if err != nil {
+			return nil, s.Wool.Wrapf(err, "cannot get validator")
+		}
+		switch validator.Name {
+		case Auth0:
+			return &AuthValidator{
+				Alg:             "RS256",
+				Audience:        []string{validator.Data["AUTH0_AUDIENCE"]},
+				JwkURL:          fmt.Sprintf("%s/.well-known/jwks.json", validator.Data["AUTH0_ISSUER_BASE_URL"]),
+				PropagateClaims: [][]string{{"sub", "X-User-ID"}},
+				Cache:           true,
+			}, nil
+		}
+	}
+	return nil, fmt.Errorf("unknown validator")
 }
 
 func main() {

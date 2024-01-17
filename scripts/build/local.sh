@@ -1,3 +1,5 @@
+#!/bin/bash
+
 FILE=agent.codefly.yaml
 AGENT=$( yq e '.name' $FILE)
 VERSION=$(yq e '.version' $FILE)
