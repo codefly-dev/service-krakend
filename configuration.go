@@ -46,7 +46,7 @@ type AuthValidator struct {
 	JwkURL          string     `json:"jwk_url,omitempty"`
 	Cache           bool       `json:"cache,omitempty"`
 	Roles           []string   `json:"roles,omitempty"`
-	PropagateClaims [][]string `json:"propagate-claims,omitempty"`
+	PropagateClaims [][]string `json:"propagate_claims,omitempty"`
 }
 
 func Protect(config *Forwarding, validator *AuthValidator) {
