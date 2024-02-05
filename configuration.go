@@ -5,20 +5,30 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"github.com/codefly-dev/core/configurations/headers"
+	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
+	"github.com/codefly-dev/core/wool"
 	"os"
 
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
-	runtimev0 "github.com/codefly-dev/core/generated/go/services/runtime/v0"
 	"github.com/codefly-dev/core/shared"
 )
 
 // KrakendSettings will contain all the static information
 // JSON -- yaml not working
 type KrakendSettings struct {
-	Port        int            `json:"port"`
-	Group       []Forwarding   `json:"group"`
-	ExtraConfig map[string]any `json:"extra_config"`
+	Port        int                 `json:"port"`
+	Group       []ForwardedEndpoint `json:"group"`
+	ExtraConfig map[string]any      `json:"extra_config"`
+}
+
+type ForwardedEndpoint struct {
+	Target       string         `json:"target"`
+	Method       string         `json:"method"`
+	InputHeaders []string       `json:"input_headers"`
+	Backend      Backend        `json:"backend"`
+	ExtraConfig  map[string]any `json:"extra_config"`
 }
 
 type Backend struct {
@@ -28,13 +38,6 @@ type Backend struct {
 
 type InputHeaders struct {
 	Headers []string `json:"headers"`
-}
-
-type Forwarding struct {
-	Target       string         `json:"target"`
-	InputHeaders []string       `json:"input_headers"`
-	Backend      Backend        `json:"backend"`
-	ExtraConfig  map[string]any `json:"extra_config"`
 }
 
 // AuthValidatorKey for auth
@@ -49,7 +52,7 @@ type AuthValidator struct {
 	PropagateClaims [][]string `json:"propagate_claims,omitempty"`
 }
 
-func Protect(config *Forwarding, validator *AuthValidator) {
+func Protect(config *ForwardedEndpoint, validator *AuthValidator) {
 	config.ExtraConfig[AuthValidatorKey] = *validator
 }
 
@@ -66,21 +69,23 @@ const CorsPolicyRouteKey = "github.com/devopsfaith/krakend-cors"
 const CorsPolicyKey = "security/cors"
 
 func Cors(key string) CorsPolicy {
+	allowedHeaders := []string{"Content-Type", "Origin", "Authorization", "Accept"}
+	allowedHeaders = append(allowedHeaders, headers.UserHeaders()...)
 	return CorsPolicy{
 		AllowOrigins:  []string{"*"},
 		AllowMethods:  []string{"GET", "POST", "PUT", "DELETE"},
-		AllowHeaders:  []string{"Content-Type", "Origin", "Authorization", "Accept"},
+		AllowHeaders:  allowedHeaders,
 		ExposeHeaders: []string{"Content-Length", "Content-Type"},
 		MaxAge:        "12h",
 	}
 }
 
-func gatewayTarget(r *configurations.RestRoute) string {
+func gatewayTarget(r *configurations.RestRouteGroup) string {
 	return fmt.Sprintf("/%s/%s%s", r.Application, r.Service, r.Path)
 }
 
-func (s *Service) writeConfig(ctx context.Context, nms []*runtimev0.NetworkMapping) error {
-	conf, err := s.createConfig(ctx, nms)
+func (s *Service) writeConfig(ctx context.Context, nms []*basev0.NetworkMapping) error {
+	conf, err := s.createConfig(ctx, nms, true)
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot create config")
 	}
@@ -99,7 +104,7 @@ type TelemetryLogging struct {
 	StdOut bool   `json:"stdout,omitempty"`
 }
 
-func (s *Service) createConfig(ctx context.Context, nms []*runtimev0.NetworkMapping) ([]byte, error) {
+func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*basev0.NetworkMapping, withIndent bool) ([]byte, error) {
 	// Write the main config
 	err := shared.Embed(config).Copy("templates/krakend.config", s.Local("config/krakend.tmpl"))
 	if err != nil {
@@ -109,38 +114,72 @@ func (s *Service) createConfig(ctx context.Context, nms []*runtimev0.NetworkMapp
 	settings := KrakendSettings{Port: s.Port, ExtraConfig: make(map[string]any)}
 	// setup CORS configuration globally
 	settings.ExtraConfig[CorsPolicyKey] = Cors(CorsPolicyKey)
-	settings.ExtraConfig[TelemetryKey] = TelemetryLogging{Level: "DEBUG", StdOut: true}
 
-	for _, route := range s.Routes {
-		nm, err := services.NetworkMappingForRoute(ctx, &route.RestRoute, nms)
+	// TODO FIX
+	//settings.ExtraConfig[TelemetryKey] = TelemetryLogging{Level: "CRITICAL", StdOut: true}
+
+	for _, group := range s.RouteGroups {
+		baseGroup := configurations.UnwrapRouteGroup(group)
+		nm, err := services.NetworkMappingForRestRouteGroup(ctx, baseGroup, otherNetworkMappings)
 		if err != nil {
-			return nil, s.Wool.Wrapf(err, "cannot get network mapping for route")
+			return nil, s.Wool.Wrapf(err, "cannot get network mapping for group")
 		}
 		var hosts []string
 		for _, h := range nm.Addresses {
 			hosts = append(hosts, fmt.Sprintf("http://%s", h))
 		}
-		fwd := NewForwarding(gatewayTarget(&route.RestRoute), route.Path, hosts)
-		if route.Extension.Protected {
-			fwd.InputHeaders = []string{"*"}
-			Protect(&fwd, s.Validator)
+		for _, route := range group.Routes {
+			if !route.Extension.Exposed {
+				continue
+			}
+			fwd := NewForwarding(gatewayTarget(baseGroup), configurations.UnwrapRoute(route), hosts)
+			if route.Extension.Protected {
+				fwd.InputHeaders = headers.UserHeaders()
+				Protect(&fwd, s.Validator)
+			}
+			settings.Group = append(settings.Group, fwd)
 		}
-		settings.Group = append(settings.Group, fwd)
-		break
 	}
-
-	content, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot marshal settings")
+	s.LogForward("exposing %d routes", len(s.RouteGroups))
+	var content []byte
+	if withIndent {
+		content, err = json.MarshalIndent(settings, "", "  ")
+		if err != nil {
+			return nil, s.Wool.Wrapf(err, "cannot marshal settings")
+		}
+	} else {
+		content, err = json.Marshal(settings)
 	}
 	return content, nil
 }
 
-func NewForwarding(target string, path string, hosts []string) Forwarding {
-	return Forwarding{
+func (s *Service) writeOpenAPI(ctx context.Context, endpoints []*basev0.Endpoint) error {
+	w := wool.Get(ctx).In("create open api")
+	gateway := configurations.EndpointFromProto(s.endpoint)
+	combinator, err := configurations.NewOpenAPICombinator(ctx, gateway, endpoints...)
+	if err != nil {
+		return w.Wrapf(err, "cannot create combinator")
+	}
+	combinator.WithDestination(s.Local("swagger.json"))
+	combinator.WithVersion(s.Configuration.Version)
+	for _, group := range s.RouteGroups {
+		baseGroup := configurations.UnwrapRouteGroup(group)
+		combinator.Only(baseGroup.ServiceUnique(), baseGroup.Path)
+	}
+	s.endpoint, err = combinator.Combine(ctx)
+	if err != nil {
+		return w.Wrapf(err, "cannot combine open api")
+	}
+	s.Endpoints = []*basev0.Endpoint{s.endpoint}
+	return nil
+}
+
+func NewForwarding(target string, route *configurations.RestRoute, hosts []string) ForwardedEndpoint {
+	return ForwardedEndpoint{
 		Target: target,
+		Method: string(route.Method),
 		Backend: Backend{
-			URL:   path,
+			URL:   route.Path,
 			Hosts: hosts,
 		},
 		ExtraConfig: make(map[string]any),

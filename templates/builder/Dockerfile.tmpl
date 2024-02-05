@@ -5,7 +5,10 @@ FROM devopsfaith/krakend
 WORKDIR /app
 
 COPY config/krakend.tmpl /app/krakend.tmpl
-ADD codefly/builder/settings /app/settings
+# Change the permissions of the file to be readable by all users
+RUN chmod 644 /app/krakend.tmpl
+
+# Actual configuration will be injected from deployment in /app/settings
 
 # Set environment variables
 ENV FC_ENABLE=1

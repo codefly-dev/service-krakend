@@ -1,10 +1,11 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Service.Unique.DnsCase }}
+  name: {{ .Service.Unique.DNSCase }}
+  namespace: {{ .Service.Namespace }}
 spec:
   selector:
-    app: {{ .Service.Unique.DnsCase}}
+    app: {{ .Service.Unique.DNSCase}}
   ports:
     - protocol: TCP
       name: http-port
