@@ -1,16 +1,29 @@
 #!/bin/bash
 
 # Usage: ./tag.sh <new_version>
+AUTO_CONFIRM=false
 
-echo "Are you sure you want to proceed? (Y/n)"
-read -r confirm
-if [[ $confirm == [yY] || $confirm == [yY][eE][sS] ]]
-then
-    echo "Publishing."
-    # Add the operations you want to perform here
-else
-    echo "Operation cancelled."
-    exit
+while getopts ":y" opt; do
+  case ${opt} in
+    y ) # process option y
+      AUTO_CONFIRM=true
+      ;;
+    \? )
+      echo "Invalid Option: -$OPTARG" 1>&2
+      exit 1
+      ;;
+  esac
+done
+shift $((OPTIND -1))
+
+if [ "$AUTO_CONFIRM" = false ] ; then
+    echo "Are you sure you want to proceed? (Y/n)"
+    read -r confirm
+    if [[ $confirm != [yY] && $confirm != [yY][eE][sS] ]]
+    then
+        echo "Operation cancelled."
+        exit
+    fi
 fi
 
 YAML_FILE="agent.codefly.yaml"
