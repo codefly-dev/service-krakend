@@ -3,7 +3,7 @@ module github.com/codefly-dev/service-krakend
 go 1.21.5
 
 require (
-	github.com/codefly-dev/core v0.1.27
+	github.com/codefly-dev/core v0.1.30
 	google.golang.org/grpc v1.61.0
 )
 
@@ -78,7 +78,7 @@ require (
 	github.com/yoheimuta/go-protoparser/v4 v4.9.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.mongodb.org/mongo-driver v1.13.1 // indirect
-	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.47.0 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.48.0 // indirect
 	go.opentelemetry.io/otel v1.23.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.22.0 // indirect
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.23.0 // indirect

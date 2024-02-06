@@ -140,7 +140,7 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 			settings.Group = append(settings.Group, fwd)
 		}
 	}
-	s.Wool.Debug("exposing %d routes", len(s.RouteGroups))
+	s.Wool.Debug("exposing routes", wool.SliceCountField(s.RouteGroups))
 	var content []byte
 	if withIndent {
 		content, err = json.MarshalIndent(settings, "", "  ")
