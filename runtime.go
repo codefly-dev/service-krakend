@@ -60,7 +60,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		return s.Runtime.InitError(err)
 	}
 
-	s.NetworkMappings = req.NetworkMappings
+	s.NetworkMappings = req.ProposedNetworkMappings
 
 	net, err := configurations.GetMappingInstance(s.NetworkMappings)
 	if err != nil {
@@ -102,7 +102,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
-	return s.Base.Runtime.InitResponse()
+	return s.Base.Runtime.InitResponse(s.NetworkMappings)
 }
 
 func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runtimev0.StartResponse, error) {

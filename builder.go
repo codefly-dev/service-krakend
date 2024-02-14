@@ -24,13 +24,14 @@ type ImportRoute struct {
 }
 
 func (imp *ImportRoute) Unique() string {
-	return fmt.Sprintf("%s/%s %s", configurations.ServiceUnique(imp.application, imp.application), imp.RestRoute.Path, imp.RestRoute.Method)
+	return fmt.Sprintf("%s%s %s", configurations.ServiceUnique(imp.application, imp.service), imp.RestRoute.Path, imp.RestRoute.Method)
 }
 
 type Builder struct {
 	*Service
 
-	sync []*ImportRoute
+	sync            []*ImportRoute
+	NetworkMappings []*basev0.NetworkMapping
 }
 
 func NewBuilder() *Builder {
@@ -79,6 +80,8 @@ func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builde
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
+	s.NetworkMappings = req.ProposedNetworkMappings
+
 	s.DependencyEndpoints = req.DependenciesEndpoints
 
 	s.Wool.Debug("dependencies", wool.SliceCountField(s.DependencyEndpoints))
@@ -95,13 +98,12 @@ func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builde
 		return s.Builder.InitError(err)
 	}
 
-	//hash, err := requirements.Hash(ctx)
-	//if err != nil {
-	//	return s.Builder.InitError(err)
-	//}
-	hash := "TODO"
+	hash, err := requirements.Hash(ctx)
+	if err != nil {
+		return s.Builder.InitError(err)
+	}
 
-	return s.Builder.InitResponse(hash)
+	return s.Builder.InitResponse(s.NetworkMappings, hash)
 }
 
 func (s *Builder) Update(ctx context.Context, req *builderv0.UpdateRequest) (*builderv0.UpdateResponse, error) {
@@ -142,6 +144,7 @@ func (s *Builder) UpdateAvailableRoutes(ctx context.Context) error {
 		for _, route := range unknown.Routes {
 			// Create the extended route
 			imp := &ImportRoute{RestRoute: route, service: unknown.Service, application: unknown.Application}
+			s.Wool.Focus("applicaiton", wool.Field("application", exposeWithoutAuth(imp)))
 			s.sync = append(s.sync, imp)
 		}
 	}
@@ -160,18 +163,26 @@ func (s *Builder) UpdateAvailableRoutes(ctx context.Context) error {
 	return nil
 }
 
-func requireAuthName(imp *ImportRoute) string {
-	return fmt.Sprintf("require-auth-%s", imp.Unique())
+func exposeWithAuth(imp *ImportRoute) string {
+	return fmt.Sprintf("expose-with-auth-%s", imp.Unique())
+}
+func exposeWithoutAuth(imp *ImportRoute) string {
+	return fmt.Sprintf("expose-without-auth-%s", imp.Unique())
+}
+func hidden(imp *ImportRoute) string {
+	return fmt.Sprintf("hidden-%s", imp.Unique())
 }
 
 func (s *Builder) syncQuestions() *communicate.Sequence {
 	var questions []*agentv0.Question
 	for _, imp := range s.sync {
-		questions = append(questions, communicate.NewConfirm(&agentv0.Message{Name: imp.Unique(),
+		questions = append(questions, communicate.NewChoice(&agentv0.Message{Name: imp.Unique(),
 			Message:     fmt.Sprintf("Want to expose REST route: %s %s for service <%s> from application <%s>", imp.Path, imp.Method, imp.service, imp.application),
-			Description: fmt.Sprintf("Corresponding route on the API service will be /%s/%s%s", imp.application, imp.service, imp.Path)}, true))
-		questions = append(questions, communicate.NewConfirm(&agentv0.Message{Name: requireAuthName(imp),
-			Message: "Requires Authentication?"}, true))
+			Description: fmt.Sprintf("Corresponding route on the API service will be /%s/%s%s", imp.application, imp.service, imp.Path)},
+			&agentv0.Message{Name: exposeWithAuth(imp), Message: "Yes (authenticated)"},
+			&agentv0.Message{Name: exposeWithoutAuth(imp), Message: "Yes (non authenticated)"},
+			&agentv0.Message{Name: hidden(imp), Message: "No (internal only)"}),
+		)
 	}
 	return communicate.NewSequence(questions...)
 }
@@ -198,7 +209,7 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 	}
 
 	for _, imp := range s.sync {
-		expose, err := session.Confirm(imp.Unique())
+		expose, err := session.Choice(imp.Unique())
 		if err != nil {
 			return s.Builder.SyncError(err)
 		}
@@ -209,13 +220,13 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 			loader.AddGroup(group)
 		}
 		route := RestRoute{RestRoute: *imp.RestRoute}
-		route.Extension.Exposed = expose
-		authRequired, err := session.Confirm(requireAuthName(imp))
-		route.Extension.Protected = authRequired
-		if err != nil {
-			return s.Builder.SyncError(err)
+		if expose.String() == hidden(imp) {
+			continue
 		}
-
+		route.Extension.Exposed = true
+		if expose.String() == exposeWithAuth(imp) {
+			route.Extension.Protected = true
+		}
 		group.Add(route)
 	}
 	err = loader.Save(ctx)
