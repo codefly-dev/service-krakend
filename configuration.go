@@ -18,22 +18,29 @@ import (
 // KrakendSettings will contain all the static information
 // JSON -- yaml not working
 type KrakendSettings struct {
-	Port        int                 `json:"port"`
-	Group       []ForwardedEndpoint `json:"group"`
-	ExtraConfig map[string]any      `json:"extra_config"`
+	Port      int                  `json:"port"`
+	RESTGroup []ForwardedRESTRoute `json:"rest_group"`
+	GRPCGroup []ForwardedGRPCRoute `json:"grpc_group"`
+
+	ExtraConfig map[string]any `json:"extra_config"`
 }
 
-type ForwardedEndpoint struct {
-	Target       string         `json:"target"`
+type ForwardedRESTRoute struct {
+	Endpoint     string         `json:"endpoint"`
 	Method       string         `json:"method"`
 	InputHeaders []string       `json:"input_headers"`
 	Backend      Backend        `json:"backend"`
 	ExtraConfig  map[string]any `json:"extra_config"`
 }
 
+type ForwardedGRPCRoute struct {
+	Endpoint string  `json:"endpoint"`
+	Backend  Backend `json:"backend"`
+}
+
 type Backend struct {
-	URL   string   `json:"url"`
-	Hosts []string `json:"hosts"`
+	URLPattern string   `json:"url_pattern"`
+	Hosts      []string `json:"hosts"`
 }
 
 type InputHeaders struct {
@@ -52,7 +59,7 @@ type AuthValidator struct {
 	PropagateClaims [][]string `json:"propagate_claims,omitempty"`
 }
 
-func Protect(config *ForwardedEndpoint, validator *AuthValidator) {
+func ProtectRestRoute(config *ForwardedRESTRoute, validator *AuthValidator) {
 	config.ExtraConfig[AuthValidatorKey] = *validator
 }
 
@@ -65,7 +72,6 @@ type CorsPolicy struct {
 	AllowCredentials bool     `json:"allow_credentials,omitempty"`
 }
 
-const CorsPolicyRouteKey = "github.com/devopsfaith/krakend-cors"
 const CorsPolicyKey = "security/cors"
 
 func Cors(key string) CorsPolicy {
@@ -80,8 +86,12 @@ func Cors(key string) CorsPolicy {
 	}
 }
 
-func gatewayTarget(r *configurations.RestRouteGroup) string {
+func gatewayRestTarget(r *configurations.RestRouteGroup) string {
 	return fmt.Sprintf("/%s/%s%s", r.Application, r.Service, r.Path)
+}
+
+func gatewayGRPCTarget(r *configurations.GRPCRoute) string {
+	return fmt.Sprintf("/%s/%s/%s", r.Application, r.Service, r.Name)
 }
 
 func (s *Service) writeConfig(ctx context.Context, nms []*basev0.NetworkMapping) error {
@@ -97,11 +107,9 @@ func (s *Service) writeConfig(ctx context.Context, nms []*basev0.NetworkMapping)
 	return nil
 }
 
-const TelemetryKey = "telemetry/logging"
-
-type TelemetryLogging struct {
-	Level  string `json:"level,omitempty"`
-	StdOut bool   `json:"stdout,omitempty"`
+type GrpcService struct {
+	PackageName string
+	ServiceName string
 }
 
 func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*basev0.NetworkMapping, withIndent bool) ([]byte, error) {
@@ -115,11 +123,8 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 	// setup CORS configuration globally
 	settings.ExtraConfig[CorsPolicyKey] = Cors(CorsPolicyKey)
 
-	// TODO FIX
-	//settings.ExtraConfig[TelemetryKey] = TelemetryLogging{Level: "CRITICAL", StdOut: true}
-
-	for _, group := range s.RouteGroups {
-		baseGroup := configurations.UnwrapRouteGroup(group)
+	for _, group := range s.RestRouteGroups {
+		baseGroup := configurations.UnwrapRestRouteGroup(group)
 		nm, err := services.NetworkMappingForRestRouteGroup(ctx, baseGroup, otherNetworkMappings)
 		if err != nil {
 			return nil, s.Wool.Wrapf(err, "cannot get network mapping for group")
@@ -132,15 +137,44 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 			if !route.Extension.Exposed {
 				continue
 			}
-			fwd := NewForwarding(gatewayTarget(baseGroup), configurations.UnwrapRoute(route), hosts)
+			fwd := NewRESTForwarding(gatewayRestTarget(baseGroup), configurations.UnwrapRestRoute(route), hosts)
 			if route.Extension.Protected {
 				fwd.InputHeaders = headers.UserHeaders()
-				Protect(&fwd, s.Validator)
+				ProtectRestRoute(&fwd, s.Validator)
 			}
-			settings.Group = append(settings.Group, fwd)
+			settings.RESTGroup = append(settings.RESTGroup, fwd)
 		}
 	}
-	s.Wool.Debug("exposing routes", wool.SliceCountField(s.RouteGroups))
+	//// Add reflection as well
+	//grpcRoutes := make(map[GrpcService][]string)
+	//
+	//for _, grpc := range s.GRPCRoutes {
+	//	if !grpc.Extension.Exposed {
+	//		continue
+	//	}
+	//	base := configurations.UnwrapGRPCRoute(grpc)
+	//	nm, err := services.NetworkMappingForGRPCRoute(ctx, base, otherNetworkMappings)
+	//	if err != nil {
+	//		return nil, s.Wool.Wrapf(err, "cannot get network mapping for grpc")
+	//	}
+	//	hosts := nm.Addresses
+	//	grpcRoutes[GrpcService{PackageName: base.Package, ServiceName: base.ServiceName}] = hosts
+	//	fwd := NewGRPCForwarding(gatewayGRPCTarget(base), base, hosts)
+	//	settings.GRPCGroup = append(settings.GRPCGroup, fwd)
+	//}
+	//s.Wool.Debug("exposing routes", wool.SliceCountField(s.RestRouteGroups))
+
+	// TODO: Fix reflection
+	//for route, hosts := range grpcRoutes {
+	//	s.Wool.Debug("exposing grpc reflection route", wool.Field("route", route))
+	//	target := "/grpc.reflection.v1alpha.ServerReflection"
+	//	fwd := NewGRPCForwarding(target, &configurations.GRPCRoute{
+	//		Package:     "grpc.reflection.v1alpha",
+	//		ServiceName: "ServerReflection",
+	//	}, hosts)
+	//	settings.GRPCGroup = append(settings.GRPCGroup, fwd)
+	//
+	//}
 	var content []byte
 	if withIndent {
 		content, err = json.MarshalIndent(settings, "", "  ")
@@ -162,8 +196,8 @@ func (s *Service) writeOpenAPI(ctx context.Context, endpoints []*basev0.Endpoint
 	}
 	combinator.WithDestination(s.Local("swagger.json"))
 	combinator.WithVersion(s.Configuration.Version)
-	for _, group := range s.RouteGroups {
-		baseGroup := configurations.UnwrapRouteGroup(group)
+	for _, group := range s.RestRouteGroups {
+		baseGroup := configurations.UnwrapRestRouteGroup(group)
 		combinator.Only(baseGroup.ServiceUnique(), baseGroup.Path)
 	}
 	s.endpoint, err = combinator.Combine(ctx)
@@ -174,15 +208,25 @@ func (s *Service) writeOpenAPI(ctx context.Context, endpoints []*basev0.Endpoint
 	return nil
 }
 
-func NewForwarding(target string, route *configurations.RestRoute, hosts []string) ForwardedEndpoint {
-	return ForwardedEndpoint{
-		Target: target,
-		Method: string(route.Method),
+func NewRESTForwarding(target string, route *configurations.RestRoute, hosts []string) ForwardedRESTRoute {
+	return ForwardedRESTRoute{
+		Endpoint: target,
+		Method:   string(route.Method),
 		Backend: Backend{
-			URL:   route.Path,
-			Hosts: hosts,
+			URLPattern: route.Path,
+			Hosts:      hosts,
 		},
 		ExtraConfig: make(map[string]any),
+	}
+}
+
+func NewGRPCForwarding(target string, base *configurations.GRPCRoute, hosts []string) ForwardedGRPCRoute {
+	return ForwardedGRPCRoute{
+		Endpoint: target,
+		Backend: Backend{
+			URLPattern: base.Route(),
+			Hosts:      hosts,
+		},
 	}
 }
 

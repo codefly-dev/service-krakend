@@ -4,6 +4,7 @@
     "extra_config": {{ marshal .routing.extra_config}},
     "endpoints": [
         {{- $total := len .routing.rest_group }}
+        {{- $total = add $total (len .routing.grpc_group) }}
         {{- $count := 0 }}
         {{- range $route := .routing.rest_group }}
         {{- $count = add $count 1 }}
@@ -19,6 +20,27 @@
             "backend": [
                 {
                     "url_pattern": "{{ $route.backend.url_pattern }}",
+                    "host": [
+                        {{- range $idx, $host := $route.backend.hosts }}
+                        {{- if $idx}},{{end}}
+                        "{{ $host }}"
+                        {{- end }}
+                    ]
+                }
+            ],
+            "extra_config": {{ marshal $route.extra_config}}
+        }
+        {{- if lt $count $total }},{{end}}
+        {{- end }}
+        {{- range $route := .routing.grpc_group }}
+        {{- $count = add $count 1 }}
+        {
+            "endpoint": "{{ $route.endpoint }}",
+            "output_encoding": "no-op",
+            "backend": [
+                {
+                    "url_pattern": "{{ $route.backend.url_pattern }}",
+                    "encoding": "grpc",
                     "host": [
                         {{- range $idx, $host := $route.backend.hosts }}
                         {{- if $idx}},{{end}}

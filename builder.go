@@ -23,6 +23,15 @@ type ImportRoute struct {
 	application string
 }
 
+type ImportGRPC struct {
+	*configurations.GRPCRoute
+}
+
+func (g *ImportGRPC) Unique() string {
+	return fmt.Sprintf("%s%s %s", g.Application, g.Service, g.Name)
+
+}
+
 func (imp *ImportRoute) Unique() string {
 	return fmt.Sprintf("%s%s %s", configurations.ServiceUnique(imp.application, imp.service), imp.RestRoute.Path, imp.RestRoute.Method)
 }
@@ -30,7 +39,9 @@ func (imp *ImportRoute) Unique() string {
 type Builder struct {
 	*Service
 
-	sync            []*ImportRoute
+	syncForREST []*ImportRoute
+	//syncGRPC    []*ImportGRPC
+
 	NetworkMappings []*basev0.NetworkMapping
 }
 
@@ -53,17 +64,33 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 
 	s.Setup()
 
-	_, err = shared.CheckDirectoryOrCreate(ctx, s.RoutesLocation)
+	_, err = shared.CheckDirectoryOrCreate(ctx, s.RestRoutesLocation)
 	if err != nil {
 		return s.Builder.LoadError(err)
 	}
+
+	//_, err = shared.CheckDirectoryOrCreate(ctx, s.GPRCRoutesLocation)
+	//if err != nil {
+	//	return s.Builder.LoadError(err)
+	//}
 
 	err = s.LoadEndpoints(ctx)
 	if err != nil {
 		return s.Builder.LoadError(err)
 	}
 
-	err = s.LoadRoutes(ctx)
+	err = s.LoadRestRoutes(ctx)
+	if err != nil {
+		return s.Builder.LoadError(err)
+	}
+	//
+	//err = s.LoadGRPCRoutes(ctx)
+	//if err != nil {
+	//	return s.Builder.LoadError(err)
+	//}
+
+	// communication on CreateResponse
+	err = s.Communication.Register(ctx, communicate.New[builderv0.CreateRequest](createCommunicate()))
 	if err != nil {
 		return s.Builder.LoadError(err)
 	}
@@ -112,78 +139,150 @@ func (s *Builder) Update(ctx context.Context, req *builderv0.UpdateRequest) (*bu
 	return &builderv0.UpdateResponse{}, nil
 }
 
-func (s *Builder) UpdateAvailableRoutes(ctx context.Context) error {
+func (s *Builder) UnknownRestRoutes(ctx context.Context) ([]*configurations.RestRouteGroup, error) {
 	defer s.Wool.Catch()
 
-	s.Wool.Debug("examining routes from dependency endpoints", wool.SliceCountField(s.DependencyEndpoints))
+	s.Wool.Debug("examining REST routes from dependency endpoints", wool.SliceCountField(s.DependencyEndpoints))
 	// supported routes should correspond to dependency endpoints
 	var updatedGroups []*RestRouteGroup
-	for _, group := range s.RouteGroups {
-		baseGroup := configurations.UnwrapRouteGroup(group)
-		matchingEndpoint := configurations.FindEndpointForRoute(ctx, s.DependencyEndpoints, baseGroup)
+	for _, group := range s.RestRouteGroups {
+		baseGroup := configurations.UnwrapRestRouteGroup(group)
+		matchingEndpoint := configurations.FindEndpointForRestRoute(ctx, s.DependencyEndpoints, baseGroup)
 		if matchingEndpoint != nil {
 			updatedGroups = append(updatedGroups, group)
 			continue
 		}
-		err := baseGroup.Delete(ctx, s.RoutesLocation)
+		err := baseGroup.Delete(ctx, s.RestRoutesLocation)
 		if err != nil {
-			return s.Wool.Wrapf(err, "cannot delete group")
+			return nil, s.Wool.Wrapf(err, "cannot delete group")
 		}
 	}
 
 	var known []*configurations.RestRouteGroup
 	for _, group := range updatedGroups {
-		known = append(known, configurations.UnwrapRouteGroup(group))
+		known = append(known, configurations.UnwrapRestRouteGroup(group))
 	}
 	s.Wool.Debug("known route groups", wool.SliceCountField(known))
 
-	unknowns := configurations.DetectNewRoutesFromEndpoints(ctx, s.DependencyEndpoints, known)
-	s.Wool.Debug("unknown route groups", wool.SliceCountField(unknowns))
-	s.sync = []*ImportRoute{}
-	for _, unknown := range unknowns {
-		for _, route := range unknown.Routes {
+	return configurations.DetectNewRoutesFromEndpoints(ctx, s.DependencyEndpoints, known), nil
+}
+
+//func (s *Builder) UnknownGRPCRoutes(ctx context.Context) ([]*configurations.GRPCRoute, error) {
+//	defer s.Wool.Catch()
+//
+//	s.Wool.Debug("examining gRPC routes from dependency endpoints", wool.SliceCountField(s.DependencyEndpoints))
+//	// supported routes should correspond to dependency endpoints
+//	var updatedRoutes []*GRPCRoute
+//	for _, route := range s.GRPCRoutes {
+//		r := configurations.UnwrapGRPCRoute(route)
+//		matchingEndpoint := configurations.FindEndpointForGRPCRoute(ctx, s.DependencyEndpoints, r)
+//		if matchingEndpoint != nil {
+//			updatedRoutes = append(updatedRoutes, route)
+//			continue
+//		}
+//		err := r.Delete(ctx, s.GPRCRoutesLocation)
+//		if err != nil {
+//			return nil, s.Wool.Wrapf(err, "cannot delete route")
+//		}
+//	}
+//	var known []*configurations.GRPCRoute
+//	for _, route := range updatedRoutes {
+//		known = append(known, configurations.UnwrapGRPCRoute(route))
+//	}
+//	s.Wool.Debug("known gRPC routes", wool.SliceCountField(known))
+//
+//	return configurations.DetectNewGRPCRoutesFromEndpoints(ctx, s.DependencyEndpoints, known), nil
+//
+//}
+
+func (s *Builder) UpdateAvailableRoutes(ctx context.Context) error {
+	defer s.Wool.Catch()
+
+	newRestRoutes, err := s.UnknownRestRoutes(ctx)
+	s.Wool.Debug("unknown REST groups", wool.SliceCountField(newRestRoutes))
+	//
+	//newGRPCRoutes, err := s.UnknownGRPCRoutes(ctx)
+	//s.Wool.Debug("unknown gRPC routes", wool.SliceCountField(newGRPCRoutes))
+
+	s.syncForREST = []*ImportRoute{}
+	for _, group := range newRestRoutes {
+		for _, route := range group.Routes {
 			// Create the extended route
-			imp := &ImportRoute{RestRoute: route, service: unknown.Service, application: unknown.Application}
-			s.Wool.Focus("applicaiton", wool.Field("application", exposeWithoutAuth(imp)))
-			s.sync = append(s.sync, imp)
+			imp := &ImportRoute{RestRoute: route, service: group.Service, application: group.Application}
+			s.Wool.Debug("application", wool.Field("application", exposeRestWithoutAuth(imp)))
+			s.syncForREST = append(s.syncForREST, imp)
 		}
 	}
+	//
+	//s.syncGRPC = []*ImportGRPC{}
+	//for _, route := range newGRPCRoutes {
+	//	imp := &ImportGRPC{GRPCRoute: route}
+	//	s.syncGRPC = append(s.syncGRPC, imp)
+	//}
 
-	if len(s.sync) == 0 {
+	if len(s.syncForREST) == 0 {
 		return nil
 	}
-	s.Wool.Debug("found new routes", wool.SliceCountField(s.sync))
+	s.Wool.Debug("found new routes", wool.SliceCountField(s.syncForREST))
 
 	// register communication for Sync
-	err := s.Communication.Register(ctx, communicate.New[builderv0.SyncRequest](s.syncQuestions()))
+	err = s.Communication.Register(ctx, communicate.New[builderv0.SyncRequest](s.syncQuestions()))
 	if err != nil {
-		return s.Wool.Wrapf(err, "cannot communicate for sync")
+		return s.Wool.Wrapf(err, "cannot communicate for syncForREST")
 	}
 
 	return nil
 }
 
-func exposeWithAuth(imp *ImportRoute) string {
-	return fmt.Sprintf("expose-with-auth-%s", imp.Unique())
+func exposeRestWithAuth(imp *ImportRoute) string {
+	return fmt.Sprintf("expose-rest-with-auth-%s", imp.Unique())
 }
-func exposeWithoutAuth(imp *ImportRoute) string {
-	return fmt.Sprintf("expose-without-auth-%s", imp.Unique())
+func exposeRestWithoutAuth(imp *ImportRoute) string {
+	return fmt.Sprintf("expose-rest-without-auth-%s", imp.Unique())
 }
-func hidden(imp *ImportRoute) string {
-	return fmt.Sprintf("hidden-%s", imp.Unique())
+func hiddenRest(imp *ImportRoute) string {
+	return fmt.Sprintf("hidden-rest-%s", imp.Unique())
+}
+
+func exposeGRPCWithAuth(imp *ImportGRPC) string {
+	return fmt.Sprintf("expose-grpc-with-auth-%s", imp.Unique())
+}
+
+func exposeGRPCWithoutAuth(imp *ImportGRPC) string {
+	return fmt.Sprintf("expose-grpc-without-auth-%s", imp.Unique())
+}
+
+func hiddenGRPC(imp *ImportGRPC) string {
+	return fmt.Sprintf("hidden-grpc-%s", imp.Unique())
 }
 
 func (s *Builder) syncQuestions() *communicate.Sequence {
 	var questions []*agentv0.Question
-	for _, imp := range s.sync {
-		questions = append(questions, communicate.NewChoice(&agentv0.Message{Name: imp.Unique(),
-			Message:     fmt.Sprintf("Want to expose REST route: %s %s for service <%s> from application <%s>", imp.Path, imp.Method, imp.service, imp.application),
-			Description: fmt.Sprintf("Corresponding route on the API service will be /%s/%s%s", imp.application, imp.service, imp.Path)},
-			&agentv0.Message{Name: exposeWithAuth(imp), Message: "Yes (authenticated)"},
-			&agentv0.Message{Name: exposeWithoutAuth(imp), Message: "Yes (non authenticated)"},
-			&agentv0.Message{Name: hidden(imp), Message: "No (internal only)"}),
+	if len(s.syncForREST) > 0 {
+		s.Wool.Info("Detected new REST routes! Let's do some import")
+	}
+	for _, imp := range s.syncForREST {
+		questions = append(questions,
+			communicate.NewChoice(&agentv0.Message{Name: imp.Unique(),
+				Message:     fmt.Sprintf("Want to expose REST route: %s %s for service <%s> from application <%s>", imp.Path, imp.Method, imp.service, imp.application),
+				Description: fmt.Sprintf("Corresponding route on the API service will be /%s/%s%s", imp.application, imp.service, imp.Path)},
+				&agentv0.Message{Name: exposeRestWithAuth(imp), Message: "Yes (authenticated)"},
+				&agentv0.Message{Name: exposeRestWithoutAuth(imp), Message: "Yes (non authenticated)"},
+				&agentv0.Message{Name: hiddenRest(imp), Message: "No (internal only)"}),
 		)
 	}
+	//if len(s.syncGRPC) > 0 {
+	//	s.Wool.Info("Detected new gRPC routes! Let's do some import")
+	//}
+	//for _, imp := range s.syncGRPC {
+	//	questions = append(questions,
+	//		communicate.NewChoice(&agentv0.Message{Name: imp.Unique(),
+	//			Message: fmt.Sprintf("Want to expose gRPC route: %s for service <%s> from application <%s>", imp.Name, imp.Service, imp.Application)},
+	//			&agentv0.Message{Name: exposeGRPCWithAuth(imp), Message: "Yes (authenticated)"},
+	//			&agentv0.Message{Name: exposeGRPCWithoutAuth(imp), Message: "Yes (non authenticated)"},
+	//			&agentv0.Message{Name: hiddenGRPC(imp), Message: "No (internal only)"}),
+	//	)
+	//}
 	return communicate.NewSequence(questions...)
 }
 
@@ -199,45 +298,84 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 		return s.Builder.SyncResponse()
 	}
 	s.Wool.Debug("states", wool.NullableField("answers", session.GetState()))
-	loader, err := configurations.NewExtendedRouteLoader[Extension](ctx, s.RoutesLocation)
-	if err != nil {
-		return s.Builder.SyncError(err)
-	}
-	err = loader.Load(ctx)
-	if err != nil {
-		return s.Builder.SyncError(err)
-	}
 
-	for _, imp := range s.sync {
+	restRouteLoader, err := configurations.NewExtendedRestRouteLoader[Extension](ctx, s.RestRoutesLocation)
+	if err != nil {
+		return s.Builder.SyncError(err)
+	}
+	err = restRouteLoader.Load(ctx)
+	if err != nil {
+		return s.Builder.SyncError(err)
+	}
+	//
+	//grpcLoader, err := configurations.NewExtendedGRPCRouteLoader[Extension](ctx, s.GPRCRoutesLocation)
+	//if err != nil {
+	//	return s.Builder.SyncError(err)
+	//}
+	//err = grpcLoader.Load(ctx)
+	//if err != nil {
+	//	return s.Builder.SyncError(err)
+	//}
+
+	for _, imp := range s.syncForREST {
 		expose, err := session.Choice(imp.Unique())
 		if err != nil {
 			return s.Builder.SyncError(err)
 		}
-		s.Wool.Debug("exposing", wool.Field("imp", imp))
-		group := loader.GroupFor(configurations.ServiceUnique(imp.application, imp.service), imp.Path)
+		group := restRouteLoader.GroupFor(configurations.ServiceUnique(imp.application, imp.service), imp.Path)
 		if group == nil {
 			group = &RestRouteGroup{Application: imp.application, Service: imp.service, Path: imp.Path}
-			loader.AddGroup(group)
+			restRouteLoader.AddGroup(group)
 		}
 		route := RestRoute{RestRoute: *imp.RestRoute}
-		if expose.String() == hidden(imp) {
+		if expose.Option == hiddenRest(imp) {
 			continue
 		}
+		s.Wool.Debug("exposing", wool.Field("key", expose.Option))
 		route.Extension.Exposed = true
-		if expose.String() == exposeWithAuth(imp) {
+		if expose.Option == exposeRestWithAuth(imp) {
 			route.Extension.Protected = true
 		}
 		group.Add(route)
 	}
-	err = loader.Save(ctx)
+
+	//for _, imp := range s.syncGRPC {
+	//	expose, err := session.Choice(imp.Unique())
+	//	if err != nil {
+	//		return s.Builder.SyncError(err)
+	//	}
+	//	route := &GRPCRoute{GRPCRoute: *imp.GRPCRoute}
+	//	if expose.Option == hiddenGRPC(imp) {
+	//		continue
+	//	}
+	//	s.Wool.Debug("exposing", wool.Field("key", expose.Option))
+	//	route.Extension.Exposed = true
+	//	if expose.Option == exposeGRPCWithAuth(imp) {
+	//		route.Extension.Protected = true
+	//	}
+	//	grpcLoader.Add(route)
+	//}
+
+	err = restRouteLoader.Save(ctx)
 	if err != nil {
 		return s.Builder.SyncError(err)
 	}
+	//
+	//err = grpcLoader.Save(ctx)
+	//if err != nil {
+	//	return s.Builder.SyncError(err)
+	//}
+
 	// Get all the routes
-	err = s.LoadRoutes(ctx)
+	err = s.LoadRestRoutes(ctx)
 	if err != nil {
 		return s.Builder.SyncError(err)
 	}
+	//
+	//err = s.LoadGRPCRoutes(ctx)
+	//if err != nil {
+	//	return s.Builder.SyncError(err)
+	//}
 
 	if err != nil {
 		return s.Builder.SyncError(err)
@@ -316,10 +454,28 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 
 /* Creation */
 
+const Watch = "with-hot-reload"
+
+func createCommunicate() *communicate.Sequence {
+	return communicate.NewSequence(
+		communicate.NewConfirm(&agentv0.Message{Name: Watch, Message: "Hot-reload on route changes?", Description: "codefly can restart your service when route changes are detected after a sync 🔎"}, true),
+	)
+}
+
 func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*builderv0.CreateResponse, error) {
 	defer s.Wool.Catch()
 
-	err := s.Templates(ctx, s.Information, services.WithFactory(factoryFS))
+	session, err := s.Communication.Done(ctx, communicate.Channel[builderv0.CreateRequest]())
+	if err != nil {
+		return s.Builder.CreateError(err)
+	}
+
+	s.Settings.Watch, err = session.Confirm(Watch)
+	if err != nil {
+		return s.Builder.CreateError(err)
+	}
+
+	err = s.Templates(ctx, s.Information, services.WithFactory(factoryFS))
 	if err != nil {
 		return s.Builder.CreateError(err)
 	}

@@ -31,6 +31,10 @@ var requirements = builders.NewDependencies(agent.Name,
 
 type Settings struct {
 	Debug bool `yaml:"debug"` // Developer only
+
+	Watch bool `yaml:"watch"`
+
+	AuthProvider string `yaml:"auth-provider"`
 }
 
 var image = runners.DockerImage{Name: "devopsfaith/krakend", Tag: "latest"}
@@ -40,11 +44,14 @@ type Extension struct {
 	Protected bool `yaml:"protected"`
 }
 
+// RestRoute extends the concept of RestRoute to add API Gateway concepts
+type RestRoute = configurations.ExtendedRestRoute[Extension]
+
 // RestRouteGroup extends the concept of RestRouteGroup to add API Gateway concepts
 type RestRouteGroup = configurations.ExtendedRestRouteGroup[Extension]
 
-// RestRoute extends the concept of RestRoute to add API Gateway concepts
-type RestRoute = configurations.ExtendedRestRoute[Extension]
+// GRPCRoute extends the concept of GRPCRoute to add API Gateway concepts
+type GRPCRoute = configurations.ExtendedGRPCRoute[Extension]
 
 type Service struct {
 	*services.Base
@@ -52,8 +59,12 @@ type Service struct {
 	// Access
 	Port int
 
-	RoutesLocation string
-	RouteGroups    []*RestRouteGroup
+	RestRoutesLocation string
+	GPRCRoutesLocation string
+
+	RestRouteGroups []*RestRouteGroup
+
+	//GRPCRoutes []*GRPCRoute
 
 	Validator *AuthValidator
 
@@ -63,7 +74,8 @@ type Service struct {
 }
 
 func (s *Service) Setup() {
-	s.RoutesLocation = s.Local("routing")
+	s.RestRoutesLocation = s.Local("routing/rest")
+	//s.GPRCRoutesLocation = s.Local("routing/grpc")
 }
 
 func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInformationRequest) (*agentv0.AgentInformation, error) {
@@ -95,9 +107,9 @@ func NewService() *Service {
 	}
 }
 
-// LoadRoutes from routing configuration folder
-func (s *Service) LoadRoutes(ctx context.Context) error {
-	loader, err := configurations.NewExtendedRouteLoader[Extension](ctx, s.RoutesLocation)
+// LoadRestRoutes from routing configuration folder
+func (s *Service) LoadRestRoutes(ctx context.Context) error {
+	loader, err := configurations.NewExtendedRestRouteLoader[Extension](ctx, s.RestRoutesLocation)
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot create route loader")
 	}
@@ -105,33 +117,46 @@ func (s *Service) LoadRoutes(ctx context.Context) error {
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot load routes")
 	}
-	s.RouteGroups = loader.Groups()
-	s.Wool.Debug("known route groups", wool.SliceCountField(s.RouteGroups))
+	s.RestRouteGroups = loader.Groups()
+	s.Wool.Debug("known REST route groups", wool.SliceCountField(s.RestRouteGroups))
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot load routing")
 	}
 	return nil
 }
 
-const Auth0 = "auth0"
+// LoadGRPCRoutes from routing configuration folder
+//func (s *Service) LoadGRPCRoutes(ctx context.Context) error {
+//	loader, err := configurations.NewExtendedGRPCRouteLoader[Extension](ctx, s.GPRCRoutesLocation)
+//	if err != nil {
+//		return s.Wool.Wrapf(err, "cannot create route loader")
+//	}
+//	err = loader.Load(ctx)
+//	if err != nil {
+//		return s.Wool.Wrapf(err, "cannot load routes")
+//	}
+//	s.GRPCRoutes = loader.All()
+//	s.Wool.Debug("known gRPC route groups", wool.SliceCountField(s.GRPCRoutes))
+//	if err != nil {
+//		return s.Wool.Wrapf(err, "cannot load routing")
+//	}
+//	return nil
+//}
 
-func (s *Service) CreateValidator(ctx context.Context, provs []*basev0.ProviderInformation) (*AuthValidator, error) {
+func (s *Service) CreateValidator(ctx context.Context, infos []*basev0.ProviderInformation) (*AuthValidator, error) {
 	// Validator
 	for _, prov := range s.Configuration.ProviderDependencies {
-		validator, err := configurations.FindProjectProvider(prov, provs)
+		validator, err := configurations.FindProjectProvider(prov, infos)
 		if err != nil {
 			return nil, s.Wool.Wrapf(err, "cannot get validator")
 		}
-		switch validator.Name {
-		case Auth0:
-			return &AuthValidator{
-				Alg:             "RS256",
-				Audience:        []string{validator.Data["AUTH0_AUDIENCE"]},
-				JwkURL:          fmt.Sprintf("%s/.well-known/jwks.json", validator.Data["AUTH0_ISSUER_BASE_URL"]),
-				PropagateClaims: [][]string{{"sub", headers.UserID}},
-				Cache:           true,
-			}, nil
-		}
+		return &AuthValidator{
+			Alg:             "RS256",
+			Audience:        []string{validator.Data["AUDIENCE"]},
+			JwkURL:          fmt.Sprintf("%s/.well-known/jwks.json", validator.Data["ISSUER_BASE_URL"]),
+			PropagateClaims: [][]string{{"sub", headers.UserAuthID}},
+			Cache:           true,
+		}, nil
 	}
 	return nil, fmt.Errorf("unknown validator")
 }
