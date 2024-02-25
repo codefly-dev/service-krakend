@@ -71,6 +71,8 @@ type Service struct {
 	// Settings
 	*Settings
 	endpoint *basev0.Endpoint
+
+	openapi string
 }
 
 func (s *Service) Setup() {

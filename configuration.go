@@ -133,6 +133,7 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 		for _, h := range nm.Addresses {
 			hosts = append(hosts, fmt.Sprintf("http://%s", h))
 		}
+		s.Wool.Focus("exposing routes", wool.Field("group", baseGroup.ServiceUnique()), wool.Field("routes", group.Routes))
 		for _, route := range group.Routes {
 			if !route.Extension.Exposed {
 				continue
@@ -194,7 +195,7 @@ func (s *Service) writeOpenAPI(ctx context.Context, endpoints []*basev0.Endpoint
 	if err != nil {
 		return w.Wrapf(err, "cannot create combinator")
 	}
-	combinator.WithDestination(s.Local("swagger.json"))
+	combinator.WithDestination(s.openapi)
 	combinator.WithVersion(s.Configuration.Version)
 	for _, group := range s.RestRouteGroups {
 		baseGroup := configurations.UnwrapRestRouteGroup(group)

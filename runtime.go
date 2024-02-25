@@ -39,6 +39,8 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 
 	s.Setup()
 
+	s.Wool.Focus("LOADING service")
+
 	err = s.LoadRestRoutes(ctx)
 	if err != nil {
 		return s.Base.Runtime.LoadError(err)
@@ -54,8 +56,10 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 		return s.Base.Runtime.LoadError(err)
 	}
 
-	if s.Settings.Watch {
-		s.Wool.Debug("setting up code watcher")
+	s.openapi = s.Local("swagger.json")
+
+	if s.Settings.Watch && s.Watcher == nil {
+		s.Wool.Focus("setting up code watcher")
 		// Add proto and swagger
 		dependencies := requirements.Clone()
 		dependencies.Localize(s.Location)
@@ -73,12 +77,28 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
+	s.Wool.Focus("generating openapi")
+
 	err := s.writeOpenAPI(ctx, req.DependenciesEndpoints)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
 
+	err = requirements.UpdateCache(ctx)
+	if err != nil {
+		return s.Runtime.InitError(err)
+	}
+
 	s.NetworkMappings = req.ProposedNetworkMappings
+
+	var updated bool
+	if updated, err = requirements.Updated(ctx); err != nil {
+		return s.Runtime.InitError(err)
+	}
+	if !updated {
+		s.Wool.Focus("no change in routing detected")
+		return s.Runtime.InitResponse(s.NetworkMappings)
+	}
 
 	net, err := configurations.GetMappingInstance(s.NetworkMappings)
 	if err != nil {
@@ -191,6 +211,7 @@ func (s *Runtime) Communicate(ctx context.Context, req *agentv0.Engage) (*agentv
  */
 
 func (s *Runtime) EventHandler(event code.Change) error {
-	s.Runtime.DesiredInit()
+	s.Wool.Focus("event detected", wool.Field("event", event))
+	s.Runtime.DesiredLoad()
 	return nil
 }
