@@ -8,7 +8,6 @@ import (
 	"github.com/codefly-dev/core/configurations/headers"
 	"github.com/codefly-dev/core/configurations/standards"
 	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
-	"github.com/codefly-dev/core/runners"
 	"github.com/codefly-dev/core/templates"
 	"github.com/codefly-dev/core/wool"
 	"google.golang.org/grpc/codes"
@@ -37,7 +36,7 @@ type Settings struct {
 	AuthProvider string `yaml:"auth-provider"`
 }
 
-var image = runners.DockerImage{Name: "devopsfaith/krakend", Tag: "latest"}
+var image = &configurations.DockerImage{Name: "devopsfaith/krakend", Tag: "latest"}
 
 type Extension struct {
 	Exposed   bool `yaml:"exposed"`

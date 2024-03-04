@@ -133,7 +133,7 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 		for _, h := range nm.Addresses {
 			hosts = append(hosts, fmt.Sprintf("http://%s", h))
 		}
-		s.Wool.Focus("exposing routes", wool.Field("group", baseGroup.ServiceUnique()), wool.Field("routes", group.Routes))
+		s.Wool.Debug("exposing routes", wool.Field("group", baseGroup.ServiceUnique()), wool.Field("routes", group.Routes))
 		for _, route := range group.Routes {
 			if !route.Extension.Exposed {
 				continue

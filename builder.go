@@ -406,7 +406,7 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 	build, err := dockerhelpers.NewBuilder(dockerhelpers.BuilderConfiguration{
 		Root:        s.Location,
 		Dockerfile:  "codefly/builder/Dockerfile",
-		Destination: s.DockerImage(),
+		Destination: image,
 		Output:      s.Wool,
 	})
 	if err != nil {
@@ -439,7 +439,7 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 	}
 
 	params := DeploymentParameter{
-		Image:       s.DockerImage(),
+		Image:       image,
 		Information: s.Information,
 		Deployment:  Deployment{Replicas: 1},
 		Settings:    string(conf)}
