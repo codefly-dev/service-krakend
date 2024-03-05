@@ -129,16 +129,12 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 		if err != nil {
 			return nil, s.Wool.Wrapf(err, "cannot get network mapping for group")
 		}
-		var hosts []string
-		for _, h := range nm.Addresses {
-			hosts = append(hosts, fmt.Sprintf("http://%s", h))
-		}
 		s.Wool.Debug("exposing routes", wool.Field("group", baseGroup.ServiceUnique()), wool.Field("routes", group.Routes))
 		for _, route := range group.Routes {
 			if !route.Extension.Exposed {
 				continue
 			}
-			fwd := NewRESTForwarding(gatewayRestTarget(baseGroup), configurations.UnwrapRestRoute(route), hosts)
+			fwd := NewRESTForwarding(gatewayRestTarget(baseGroup), configurations.UnwrapRestRoute(route), nm.Addresses)
 			if route.Extension.Protected {
 				fwd.InputHeaders = headers.UserHeaders()
 				ProtectRestRoute(&fwd, s.Validator)

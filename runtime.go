@@ -83,22 +83,22 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
-
-	err = requirements.UpdateCache(ctx)
-	if err != nil {
-		return s.Runtime.InitError(err)
-	}
+	//
+	//err = requirements.UpdateCache(ctx)
+	//if err != nil {
+	//	return s.Runtime.InitError(err)
+	//}
 
 	s.NetworkMappings = req.ProposedNetworkMappings
 
-	var updated bool
-	if updated, err = requirements.Updated(ctx); err != nil {
-		return s.Runtime.InitError(err)
-	}
-	if !updated {
-		s.Wool.Debug("no change in routing detected")
-		return s.Runtime.InitResponse(s.NetworkMappings)
-	}
+	//var updated bool
+	//if updated, err = requirements.Updated(ctx); err != nil {
+	//	return s.Runtime.InitError(err)
+	//}
+	//if !updated {
+	//	s.Wool.Debug("no change in routing detected")
+	//	return s.Runtime.InitResponse(s.NetworkMappings)
+	//}
 
 	net, err := configurations.GetMappingInstance(s.NetworkMappings)
 	if err != nil {
