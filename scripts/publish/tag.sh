@@ -1,30 +1,7 @@
 #!/bin/bash
 
 # Usage: ./tag.sh <new_version>
-AUTO_CONFIRM=false
 
-while getopts ":y" opt; do
-  case ${opt} in
-    y ) # process option y
-      AUTO_CONFIRM=true
-      ;;
-    \? )
-      echo "Invalid Option: -$OPTARG" 1>&2
-      exit 1
-      ;;
-  esac
-done
-shift $((OPTIND -1))
-
-if [ "$AUTO_CONFIRM" = false ] ; then
-    echo "Are you sure you want to proceed? (Y/n)"
-    read -r confirm
-    if [[ $confirm != [yY] && $confirm != [yY][eE][sS] ]]
-    then
-        echo "Operation cancelled."
-        exit
-    fi
-fi
 
 YAML_FILE="agent.codefly.yaml"
 
@@ -50,7 +27,3 @@ git commit -m "Update version to $NEW_VERSION"
 
 # Tag the commit
 git tag -a "v$NEW_VERSION" -m "Version $NEW_VERSION" -f
-
-# Force push the commit and tag to the remote repository
-git push -f
-git push origin "v$NEW_VERSION" -f
