@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"github.com/codefly-dev/core/agents/helpers/code"
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
-	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
 	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
 	runtimev0 "github.com/codefly-dev/core/generated/go/services/runtime/v0"
 	"github.com/codefly-dev/core/runners"
@@ -17,9 +15,7 @@ type Runtime struct {
 	*Service
 
 	// internal
-	runner          *runners.Docker
-	Address         string
-	NetworkMappings []*basev0.NetworkMapping
+	runner *runners.Docker
 }
 
 func NewRuntime() *Runtime {
@@ -56,7 +52,7 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 		return s.Base.Runtime.LoadError(err)
 	}
 
-	s.openapi = s.Local("swagger.json")
+	s.openapiDestination = s.Local("swagger.json")
 
 	if s.Settings.Watch && s.Watcher == nil {
 		s.Wool.Debug("setting up code watcher")
@@ -77,7 +73,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	s.Wool.Debug("generating openapi")
+	s.Wool.Debug("generating openapiDestination")
 
 	err := s.writeOpenAPI(ctx, req.DependenciesEndpoints)
 	if err != nil {
@@ -97,21 +93,20 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	//}
 	//if !updated {
 	//	s.Wool.Debug("no change in routing detected")
-	//	return s.Runtime.InitResponse(s.NetworkMappings)
+	//	return s.Runtime.InitResponse(s.networkMappings)
 	//}
 
-	net, err := configurations.GetMappingInstance(s.NetworkMappings)
+	net, err := configurations.FindNetworkMapping(s.restEndpoint, s.NetworkMappings)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
 
-	s.Address = net.Address
 	s.LogForward("will run on: %s", net.Address)
 
 	// for docker
-	s.Port = 80
+	s.port = 80
 
-	s.Validator, err = s.CreateValidator(ctx, req.ProviderInfos)
+	s.validator, err = s.CreateValidator(ctx, req.ProviderInfos)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
@@ -132,7 +127,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 
 	s.runner.WithMount(s.Local("config"), "/app/config")
 
-	s.runner.WithPort(runners.DockerPortMapping{Container: s.Port, Host: net.Port})
+	s.runner.WithPort(runners.DockerPortMapping{Container: s.port, Host: net.Port})
 
 	envs := []string{
 		"FC_ENABLE=1",
@@ -149,7 +144,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		return s.Runtime.InitError(err)
 	}
 
-	return s.Base.Runtime.InitResponse(s.NetworkMappings)
+	return s.Base.Runtime.InitResponse()
 }
 
 func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runtimev0.StartResponse, error) {
@@ -160,14 +155,12 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 		return s.Runtime.StartResponse()
 	}
 
-	_, _ = s.Wool.Forward([]byte(fmt.Sprintf("running on: %s", s.Address)))
-
 	s.Wool.Debug("starting runtime", wool.NullableField("network mappings", configurations.MakeNetworkMappingSummary(req.OtherNetworkMappings)))
 
 	// For docker, replace localhost by host.docker.internal
-	nm := configurations.LocalizeMappings(req.OtherNetworkMappings, "host.docker.internal")
+	configurations.LocalizeMappings(req.OtherNetworkMappings, "host.docker.internal")
 
-	err := s.writeConfig(ctx, nm)
+	err := s.writeConfig(ctx, req.OtherNetworkMappings)
 	if err != nil {
 		return s.Runtime.StartError(err)
 	}

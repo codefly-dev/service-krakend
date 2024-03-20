@@ -56,26 +56,27 @@ type Service struct {
 	*services.Base
 
 	// Access
-	Port int
+	port int32
 
-	RestRoutesLocation string
-	GPRCRoutesLocation string
+	restRoutesLocation string
+
+	//GPRCRoutesLocation string
 
 	RestRouteGroups []*RestRouteGroup
 
 	//GRPCRoutes []*GRPCRoute
 
-	Validator *AuthValidator
+	validator *AuthValidator
 
 	// Settings
 	*Settings
-	endpoint *basev0.Endpoint
 
-	openapi string
+	restEndpoint       *basev0.Endpoint
+	openapiDestination string
 }
 
 func (s *Service) Setup() {
-	s.RestRoutesLocation = s.Local("routing/rest")
+	s.restRoutesLocation = s.Local("routing/rest")
 	//s.GPRCRoutesLocation = s.Local("routing/grpc")
 }
 
@@ -110,7 +111,7 @@ func NewService() *Service {
 
 // LoadRestRoutes from routing configuration folder
 func (s *Service) LoadRestRoutes(ctx context.Context) error {
-	loader, err := configurations.NewExtendedRestRouteLoader[Extension](ctx, s.RestRoutesLocation)
+	loader, err := configurations.NewExtendedRestRouteLoader[Extension](ctx, s.restRoutesLocation)
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot create route loader")
 	}
@@ -145,7 +146,7 @@ func (s *Service) LoadRestRoutes(ctx context.Context) error {
 //}
 
 func (s *Service) CreateValidator(ctx context.Context, infos []*basev0.ProviderInformation) (*AuthValidator, error) {
-	// Validator
+	// validator
 	for _, prov := range s.Configuration.ProviderDependencies {
 		validator, err := configurations.FindProjectProvider(prov, infos)
 		if err != nil {
@@ -164,25 +165,24 @@ func (s *Service) CreateValidator(ctx context.Context, infos []*basev0.ProviderI
 
 func (s *Service) LoadEndpoints(ctx context.Context) error {
 	defer s.Wool.Catch()
-	s.Endpoints = []*basev0.Endpoint{}
-	var err error
 	for _, endpoint := range s.Configuration.Endpoints {
-		var api *basev0.Endpoint
 		endpoint.Application = s.Configuration.Application
 		endpoint.Service = s.Configuration.Name
 		if shared.FileExists(s.Local("swagger.json")) {
-			api, err = configurations.NewRestAPIFromOpenAPI(ctx, &configurations.Endpoint{Name: standards.REST, API: standards.REST, Visibility: endpoint.Visibility}, s.Local("swagger.json"))
+			rest, err := configurations.NewRestAPIFromOpenAPI(ctx, &configurations.Endpoint{Name: standards.REST, API: standards.REST, Visibility: endpoint.Visibility}, s.Local("swagger.json"))
 			if err != nil {
 				return s.Wool.Wrapf(err, "cannot  create rest endpoint")
 			}
+			s.restEndpoint = rest
+			s.Endpoints = []*basev0.Endpoint{s.restEndpoint}
 		} else {
-			api, err = configurations.NewRestAPI(ctx, &configurations.Endpoint{Name: standards.REST, API: standards.REST, Visibility: endpoint.Visibility})
+			rest, err := configurations.NewRestAPI(ctx, &configurations.Endpoint{Name: standards.REST, API: standards.REST, Visibility: endpoint.Visibility})
 			if err != nil {
 				return s.Wool.Wrapf(err, "cannot  create rest endpoint")
 			}
+			s.restEndpoint = rest
+			s.Endpoints = []*basev0.Endpoint{s.restEndpoint}
 		}
-		s.endpoint = api
-		s.Endpoints = append(s.Endpoints, s.endpoint)
 	}
 	return nil
 }

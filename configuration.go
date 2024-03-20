@@ -18,7 +18,7 @@ import (
 // KrakendSettings will contain all the static information
 // JSON -- yaml not working
 type KrakendSettings struct {
-	Port      int                  `json:"port"`
+	Port      int32                `json:"port"`
 	RESTGroup []ForwardedRESTRoute `json:"rest_group"`
 	GRPCGroup []ForwardedGRPCRoute `json:"grpc_group"`
 
@@ -119,7 +119,7 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 		return nil, s.Wool.Wrapf(err, "cannot copy config")
 	}
 
-	settings := KrakendSettings{Port: s.Port, ExtraConfig: make(map[string]any)}
+	settings := KrakendSettings{Port: s.port, ExtraConfig: make(map[string]any)}
 	// setup CORS configuration globally
 	settings.ExtraConfig[CorsPolicyKey] = Cors(CorsPolicyKey)
 
@@ -134,10 +134,10 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 			if !route.Extension.Exposed {
 				continue
 			}
-			fwd := NewRESTForwarding(gatewayRestTarget(baseGroup), configurations.UnwrapRestRoute(route), nm.Addresses)
+			fwd := NewRESTForwarding(gatewayRestTarget(baseGroup), configurations.UnwrapRestRoute(route), nm.Address)
 			if route.Extension.Protected {
 				fwd.InputHeaders = headers.UserHeaders()
-				ProtectRestRoute(&fwd, s.Validator)
+				ProtectRestRoute(&fwd, s.validator)
 			}
 			settings.RESTGroup = append(settings.RESTGroup, fwd)
 		}
@@ -186,32 +186,32 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 
 func (s *Service) writeOpenAPI(ctx context.Context, endpoints []*basev0.Endpoint) error {
 	w := wool.Get(ctx).In("create open api")
-	gateway := configurations.EndpointFromProto(s.endpoint)
+	gateway := configurations.EndpointFromProto(s.restEndpoint)
 	combinator, err := configurations.NewOpenAPICombinator(ctx, gateway, endpoints...)
 	if err != nil {
 		return w.Wrapf(err, "cannot create combinator")
 	}
-	combinator.WithDestination(s.openapi)
+	combinator.WithDestination(s.openapiDestination)
 	combinator.WithVersion(s.Configuration.Version)
 	for _, group := range s.RestRouteGroups {
 		baseGroup := configurations.UnwrapRestRouteGroup(group)
 		combinator.Only(baseGroup.ServiceUnique(), baseGroup.Path)
 	}
-	s.endpoint, err = combinator.Combine(ctx)
+	s.restEndpoint, err = combinator.Combine(ctx)
 	if err != nil {
 		return w.Wrapf(err, "cannot combine open api")
 	}
-	s.Endpoints = []*basev0.Endpoint{s.endpoint}
+	s.Endpoints = []*basev0.Endpoint{s.restEndpoint}
 	return nil
 }
 
-func NewRESTForwarding(target string, route *configurations.RestRoute, hosts []string) ForwardedRESTRoute {
+func NewRESTForwarding(target string, route *configurations.RestRoute, host string) ForwardedRESTRoute {
 	return ForwardedRESTRoute{
 		Endpoint: target,
 		Method:   string(route.Method),
 		Backend: Backend{
 			URLPattern: route.Path,
-			Hosts:      hosts,
+			Hosts:      []string{host},
 		},
 		ExtraConfig: make(map[string]any),
 	}

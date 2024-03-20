@@ -41,8 +41,6 @@ type Builder struct {
 
 	syncForREST []*ImportRoute
 	//syncGRPC    []*ImportGRPC
-
-	NetworkMappings []*basev0.NetworkMapping
 }
 
 func NewBuilder() *Builder {
@@ -64,7 +62,7 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 
 	s.Setup()
 
-	_, err = shared.CheckDirectoryOrCreate(ctx, s.RestRoutesLocation)
+	_, err = shared.CheckDirectoryOrCreate(ctx, s.restRoutesLocation)
 	if err != nil {
 		return s.Builder.LoadError(err)
 	}
@@ -117,20 +115,20 @@ func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builde
 	if err != nil {
 		return s.Builder.InitError(err)
 	}
-	s.Validator = validator
+	s.validator = validator
 
 	err = s.UpdateAvailableRoutes(ctx)
 
 	if err != nil {
 		return s.Builder.InitError(err)
 	}
+	//
+	//hash, err := requirements.Hash(ctx)
+	//if err != nil {
+	//	return s.Builder.InitError(err)
+	//}
 
-	hash, err := requirements.Hash(ctx)
-	if err != nil {
-		return s.Builder.InitError(err)
-	}
-
-	return s.Builder.InitResponse(s.NetworkMappings, hash)
+	return s.Builder.InitResponse()
 }
 
 func (s *Builder) Update(ctx context.Context, req *builderv0.UpdateRequest) (*builderv0.UpdateResponse, error) {
@@ -152,7 +150,7 @@ func (s *Builder) UnknownRestRoutes(ctx context.Context) ([]*configurations.Rest
 			updatedGroups = append(updatedGroups, group)
 			continue
 		}
-		err := baseGroup.Delete(ctx, s.RestRoutesLocation)
+		err := baseGroup.Delete(ctx, s.restRoutesLocation)
 		if err != nil {
 			return nil, s.Wool.Wrapf(err, "cannot delete group")
 		}
@@ -262,6 +260,7 @@ func (s *Builder) syncQuestions() *communicate.Sequence {
 		s.Wool.Info("Detected new REST routes! Let's do some import")
 	}
 	for _, imp := range s.syncForREST {
+		s.Builder.Focus("new route", wool.Field("route", imp.Unique()))
 		questions = append(questions,
 			communicate.NewChoice(&agentv0.Message{Name: imp.Unique(),
 				Message:     fmt.Sprintf("Want to expose REST route: %s %s for service <%s> from application <%s>", imp.Path, imp.Method, imp.service, imp.application),
@@ -299,7 +298,7 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 	}
 	s.Wool.Debug("states", wool.NullableField("answers", session.GetState()))
 
-	restRouteLoader, err := configurations.NewExtendedRestRouteLoader[Extension](ctx, s.RestRoutesLocation)
+	restRouteLoader, err := configurations.NewExtendedRestRouteLoader[Extension](ctx, s.restRoutesLocation)
 	if err != nil {
 		return s.Builder.SyncError(err)
 	}
@@ -419,17 +418,6 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 	return &builderv0.BuildResponse{}, nil
 }
 
-type Deployment struct {
-	Replicas int
-}
-
-type DeploymentParameter struct {
-	Image *configurations.DockerImage
-	*services.Information
-	Deployment
-	Settings string
-}
-
 func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) (*builderv0.DeploymentResponse, error) {
 	defer s.Wool.Catch()
 
@@ -438,11 +426,11 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 		return nil, s.Wool.Wrapf(err, "cannot write config")
 	}
 
-	params := DeploymentParameter{
-		Image:       image,
-		Information: s.Information,
-		Deployment:  Deployment{Replicas: 1},
-		Settings:    string(conf)}
+	params := services.DeploymentTemplateInput{
+		Image:                   image,
+		Information:             s.Information,
+		DeploymentConfiguration: services.DeploymentConfiguration{Replicas: 1},
+		Parameters:              string(conf)}
 
 	err = s.Builder.Deploy(ctx, req, deploymentFS, params)
 	if err != nil {
@@ -496,23 +484,21 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 
 func (s *Service) CreateEndpoint(ctx context.Context) error {
 	defer s.Wool.Catch()
+	endpoint := s.Configuration.BaseEndpoint(standards.REST)
+	endpoint.Visibility = configurations.VisibilityPublic
 	var err error
-	var endpoint *basev0.Endpoint
 	if shared.FileExists(s.Local("swagger.json")) {
-		endpoint, err = configurations.NewRestAPIFromOpenAPI(ctx, &configurations.Endpoint{Name: standards.REST, API: standards.REST, Visibility: configurations.VisibilityPublic}, s.Local("swagger.json"))
+		s.restEndpoint, err = configurations.NewRestAPIFromOpenAPI(ctx, endpoint, s.Local("swagger.json"))
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot  create rest endpoint")
 		}
 	} else {
-		endpoint, err = configurations.NewRestAPI(ctx, &configurations.Endpoint{Name: standards.REST, API: standards.REST, Visibility: configurations.VisibilityPublic})
+		s.restEndpoint, err = configurations.NewRestAPI(ctx, endpoint)
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot  create rest endpoint")
 		}
 	}
-	endpoint.Application = s.Configuration.Application
-	endpoint.Service = s.Configuration.Name
-	s.endpoint = endpoint
-	s.Endpoints = []*basev0.Endpoint{s.endpoint}
+	s.Endpoints = []*basev0.Endpoint{s.restEndpoint}
 	return nil
 }
 
