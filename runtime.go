@@ -158,9 +158,9 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	s.Wool.Debug("starting runtime", wool.NullableField("network mappings", configurations.MakeNetworkMappingSummary(req.OtherNetworkMappings)))
 
 	// For docker, replace localhost by host.docker.internal
-	req.OtherNetworkMappings = configurations.LocalizeMappings(req.OtherNetworkMappings, "host.docker.internal")
+	s.NetworkMappings = configurations.LocalizeMappings(req.OtherNetworkMappings, "host.docker.internal")
 
-	err := s.writeConfig(ctx, req.OtherNetworkMappings)
+	err := s.writeConfig(ctx, s.NetworkMappings)
 	if err != nil {
 		return s.Runtime.StartError(err)
 	}
