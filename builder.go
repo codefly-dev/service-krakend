@@ -426,13 +426,11 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 		return nil, s.Wool.Wrapf(err, "cannot write config")
 	}
 
-	params := services.DeploymentTemplateInput{
-		Image:                   image,
-		Information:             s.Information,
-		DeploymentConfiguration: services.DeploymentConfiguration{Replicas: 1},
-		Parameters:              string(conf)}
+	params := services.DeploymentParameters{
+		Parameters: string(conf)}
 
-	err = s.Builder.Deploy(ctx, req, deploymentFS, params)
+	panic("TODO: SEE REDIS")
+	err = s.Builder.GenericServiceDeploy(ctx, req, deploymentFS, params)
 	if err != nil {
 		return s.Builder.DeployError(err)
 	}
