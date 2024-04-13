@@ -42,12 +42,7 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 		return s.Base.Runtime.LoadError(err)
 	}
 
-	//err = s.LoadGRPCRoutes(ctx)
-	//if err != nil {
-	//	return s.Base.Runtime.LoadError(err)
-	//}
-
-	err = s.LoadEndpoints(ctx)
+	s.Endpoints, err = s.Base.Service.LoadEndpoints(ctx)
 	if err != nil {
 		return s.Base.Runtime.LoadError(err)
 	}
@@ -79,24 +74,10 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
-	//
-	//err = requirements.UpdateCache(ctx)
-	//if err != nil {
-	//	return s.Runtime.InitError(err)
-	//}
 
 	s.NetworkMappings = req.ProposedNetworkMappings
 
-	//var updated bool
-	//if updated, err = requirements.Updated(ctx); err != nil {
-	//	return s.Runtime.InitError(err)
-	//}
-	//if !updated {
-	//	s.Wool.Debug("no change in routing detected")
-	//	return s.Runtime.InitResponse(s.networkMappings)
-	//}
-
-	net, err := configurations.FindNetworkMapping(s.restEndpoint, s.NetworkMappings)
+	net, err := s.Runtime.NetworkInstance(ctx, s.NetworkMappings, s.restEndpoint)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
@@ -106,7 +87,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	// for docker
 	s.port = 80
 
-	s.validator, err = s.CreateValidator(ctx, req.ProviderInfos)
+	s.validator, err = s.CreateValidator(ctx, req.Configuration)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
@@ -118,7 +99,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		}
 	}
 
-	runner, err := runners.NewDocker(ctx)
+	runner, err := runners.NewDocker(ctx, image)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
@@ -127,19 +108,19 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 
 	s.runner.WithMount(s.Local("config"), "/app/config")
 
-	s.runner.WithPort(runners.DockerPortMapping{Container: s.port, Host: net.Port})
+	s.runner.WithPort(runners.DockerPortMapping{Container: s.port, Host: uint16(net.Port)})
 
-	envs := []string{
-		"FC_ENABLE=1",
-		"FC_SETTINGS=/app/config/settings",
-		"FC_CONFIG=/app/config/out.json",
+	envs := []configurations.EnvironmentVariable{
+		configurations.Env("FC_ENABLE", 1),
+		configurations.Env("FC_SETTINGS", "/app/config/settings"),
+		configurations.Env("FC_CONFIG", "/app/config/out.json"),
 	}
 
 	s.runner.WithEnvironmentVariables(envs...)
 
 	s.runner.WithCommand("krakend", "run", "-d", "-c", "/app/config/krakend.tmpl")
 
-	err = s.runner.Init(ctx, image)
+	err = s.runner.Init(ctx)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
@@ -155,12 +136,9 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 		return s.Runtime.StartResponse()
 	}
 
-	s.Wool.Debug("starting runtime", wool.NullableField("network mappings", configurations.MakeNetworkMappingSummary(req.OtherNetworkMappings)))
+	s.Runtime.LogStartRequest(req)
 
-	// For docker, replace localhost by host.docker.internal
-	s.NetworkMappings = configurations.LocalizeMappings(req.OtherNetworkMappings, "host.docker.internal")
-
-	err := s.writeConfig(ctx, s.NetworkMappings)
+	err := s.writeConfig(ctx, req.DependenciesNetworkMappings, s.Runtime.Scope)
 	if err != nil {
 		return s.Runtime.StartError(err)
 	}
@@ -193,6 +171,11 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtim
 		return s.Runtime.StopError(err)
 	}
 	return s.Runtime.StopResponse()
+}
+
+func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtimev0.TestResponse, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (s *Runtime) Communicate(ctx context.Context, req *agentv0.Engage) (*agentv0.InformationRequest, error) {

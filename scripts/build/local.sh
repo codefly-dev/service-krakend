@@ -1,8 +1,8 @@
 #!/bin/bash
 
 FILE=agent.codefly.yaml
-AGENT=$( yq e '.name' $FILE)
-VERSION=$(yq e '.version' $FILE)
+AGENT=$( yq -r '.name' $FILE)
+VERSION=$(yq -r '.version' $FILE)
 
 go mod tidy
 echo Building ${AGENT}:${VERSION}

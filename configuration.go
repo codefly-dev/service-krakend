@@ -18,9 +18,8 @@ import (
 // KrakendSettings will contain all the static information
 // JSON -- yaml not working
 type KrakendSettings struct {
-	Port      int32                `json:"port"`
+	Port      uint16               `json:"port"`
 	RESTGroup []ForwardedRESTRoute `json:"rest_group"`
-	GRPCGroup []ForwardedGRPCRoute `json:"grpc_group"`
 
 	ExtraConfig map[string]any `json:"extra_config"`
 }
@@ -90,12 +89,8 @@ func gatewayRestTarget(r *configurations.RestRouteGroup) string {
 	return fmt.Sprintf("/%s/%s%s", r.Application, r.Service, r.Path)
 }
 
-func gatewayGRPCTarget(r *configurations.GRPCRoute) string {
-	return fmt.Sprintf("/%s/%s/%s", r.Application, r.Service, r.Name)
-}
-
-func (s *Service) writeConfig(ctx context.Context, nms []*basev0.NetworkMapping) error {
-	conf, err := s.createConfig(ctx, nms, true)
+func (s *Service) writeConfig(ctx context.Context, nms []*basev0.NetworkMapping, scope basev0.NetworkScope) error {
+	conf, err := s.createConfig(ctx, nms, scope)
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot create config")
 	}
@@ -107,12 +102,7 @@ func (s *Service) writeConfig(ctx context.Context, nms []*basev0.NetworkMapping)
 	return nil
 }
 
-type GrpcService struct {
-	PackageName string
-	ServiceName string
-}
-
-func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*basev0.NetworkMapping, withIndent bool) ([]byte, error) {
+func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*basev0.NetworkMapping, scope basev0.NetworkScope) ([]byte, error) {
 	// Write the main config
 	err := shared.Embed(config).Copy("templates/krakend.config", s.Local("config/krakend.tmpl"))
 	if err != nil {
@@ -125,7 +115,7 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 
 	for _, group := range s.RestRouteGroups {
 		baseGroup := configurations.UnwrapRestRouteGroup(group)
-		nm, err := services.NetworkMappingForRestRouteGroup(ctx, baseGroup, otherNetworkMappings)
+		nm, err := services.NetworkInstanceForRestRouteGroup(ctx, baseGroup, scope, otherNetworkMappings)
 		if err != nil {
 			return nil, s.Wool.Wrapf(err, "cannot get network mapping for group")
 		}
@@ -142,44 +132,10 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 			settings.RESTGroup = append(settings.RESTGroup, fwd)
 		}
 	}
-	//// Add reflection as well
-	//grpcRoutes := make(map[GrpcService][]string)
-	//
-	//for _, grpc := range s.GRPCRoutes {
-	//	if !grpc.Extension.Exposed {
-	//		continue
-	//	}
-	//	base := configurations.UnwrapGRPCRoute(grpc)
-	//	nm, err := services.NetworkMappingForGRPCRoute(ctx, base, otherNetworkMappings)
-	//	if err != nil {
-	//		return nil, s.Wool.Wrapf(err, "cannot get network mapping for grpc")
-	//	}
-	//	hosts := nm.Addresses
-	//	grpcRoutes[GrpcService{PackageName: base.Package, ServiceName: base.ServiceName}] = hosts
-	//	fwd := NewGRPCForwarding(gatewayGRPCTarget(base), base, hosts)
-	//	settings.GRPCGroup = append(settings.GRPCGroup, fwd)
-	//}
-	//s.Wool.Debug("exposing routes", wool.SliceCountField(s.RestRouteGroups))
-
-	// TODO: Fix reflection
-	//for route, hosts := range grpcRoutes {
-	//	s.Wool.Debug("exposing grpc reflection route", wool.Field("route", route))
-	//	target := "/grpc.reflection.v1alpha.ServerReflection"
-	//	fwd := NewGRPCForwarding(target, &configurations.GRPCRoute{
-	//		Package:     "grpc.reflection.v1alpha",
-	//		ServiceName: "ServerReflection",
-	//	}, hosts)
-	//	settings.GRPCGroup = append(settings.GRPCGroup, fwd)
-	//
-	//}
 	var content []byte
-	if withIndent {
-		content, err = json.MarshalIndent(settings, "", "  ")
-		if err != nil {
-			return nil, s.Wool.Wrapf(err, "cannot marshal settings")
-		}
-	} else {
-		content, err = json.Marshal(settings)
+	content, err = json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return nil, s.Wool.Wrapf(err, "cannot marshal settings")
 	}
 	return content, nil
 }
@@ -192,7 +148,7 @@ func (s *Service) writeOpenAPI(ctx context.Context, endpoints []*basev0.Endpoint
 		return w.Wrapf(err, "cannot create combinator")
 	}
 	combinator.WithDestination(s.openapiDestination)
-	combinator.WithVersion(s.Configuration.Version)
+	combinator.WithVersion(s.Base.Service.Version)
 	for _, group := range s.RestRouteGroups {
 		baseGroup := configurations.UnwrapRestRouteGroup(group)
 		combinator.Only(baseGroup.ServiceUnique(), baseGroup.Path)

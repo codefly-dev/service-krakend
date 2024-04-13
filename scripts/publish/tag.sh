@@ -13,7 +13,7 @@ fi
 # Argument is patch/minor/major and defaults to patch
 NEW_VERSION_TYPE=${1:-patch}
 
-CURRENT_VERSION=$(yq eval '.version' "$YAML_FILE")
+CURRENT_VERSION=$(yq -r '.version' "$YAML_FILE")
 NEW_VERSION=$(semver bump "$NEW_VERSION_TYPE" "$CURRENT_VERSION")
 
 # Update the version in the YAML file (for macOS)

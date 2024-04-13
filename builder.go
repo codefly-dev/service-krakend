@@ -40,7 +40,6 @@ type Builder struct {
 	*Service
 
 	syncForREST []*ImportRoute
-	//syncGRPC    []*ImportGRPC
 }
 
 func NewBuilder() *Builder {
@@ -67,12 +66,22 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 		return s.Builder.LoadError(err)
 	}
 
-	//_, err = shared.CheckDirectoryOrCreate(ctx, s.GPRCRoutesLocation)
-	//if err != nil {
-	//	return s.Builder.LoadError(err)
-	//}
+	// communication on CreateResponse
+	err = s.Communication.Register(ctx, communicate.New[builderv0.CreateRequest](createCommunicate()))
+	if err != nil {
+		return s.Builder.LoadError(err)
+	}
 
-	err = s.LoadEndpoints(ctx)
+	s.Builder.GettingStarted, err = templates.ApplyTemplateFrom(ctx, shared.Embed(factoryFS), "templates/factory/GETTING_STARTED.md", s.Information)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.AtCreate {
+		return s.Builder.LoadResponse()
+	}
+
+	s.Endpoints, err = s.Base.Service.LoadEndpoints(ctx)
 	if err != nil {
 		return s.Builder.LoadError(err)
 	}
@@ -81,43 +90,17 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 	if err != nil {
 		return s.Builder.LoadError(err)
 	}
-	//
-	//err = s.LoadGRPCRoutes(ctx)
-	//if err != nil {
-	//	return s.Builder.LoadError(err)
-	//}
 
-	// communication on CreateResponse
-	err = s.Communication.Register(ctx, communicate.New[builderv0.CreateRequest](createCommunicate()))
-	if err != nil {
-		return s.Builder.LoadError(err)
-	}
-
-	gettingStarted, err := templates.ApplyTemplateFrom(ctx, shared.Embed(factoryFS), "templates/factory/GETTING_STARTED.md", s.Information)
-	if err != nil {
-		return nil, err
-	}
-
-	return s.Builder.LoadResponse(gettingStarted)
+	return s.Builder.LoadResponse()
 }
 
 func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builderv0.InitResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	s.NetworkMappings = req.ProposedNetworkMappings
-
 	s.DependencyEndpoints = req.DependenciesEndpoints
 
-	s.Wool.Debug("dependencies", wool.SliceCountField(s.DependencyEndpoints))
-
-	validator, err := s.CreateValidator(ctx, req.ProviderInfos)
-	if err != nil {
-		return s.Builder.InitError(err)
-	}
-	s.validator = validator
-
-	err = s.UpdateAvailableRoutes(ctx)
+	err := s.UpdateAvailableRoutes(ctx)
 
 	if err != nil {
 		return s.Builder.InitError(err)
@@ -165,42 +148,11 @@ func (s *Builder) UnknownRestRoutes(ctx context.Context) ([]*configurations.Rest
 	return configurations.DetectNewRoutesFromEndpoints(ctx, s.DependencyEndpoints, known), nil
 }
 
-//func (s *Builder) UnknownGRPCRoutes(ctx context.Context) ([]*configurations.GRPCRoute, error) {
-//	defer s.Wool.Catch()
-//
-//	s.Wool.Debug("examining gRPC routes from dependency endpoints", wool.SliceCountField(s.DependencyEndpoints))
-//	// supported routes should correspond to dependency endpoints
-//	var updatedRoutes []*GRPCRoute
-//	for _, route := range s.GRPCRoutes {
-//		r := configurations.UnwrapGRPCRoute(route)
-//		matchingEndpoint := configurations.FindEndpointForGRPCRoute(ctx, s.DependencyEndpoints, r)
-//		if matchingEndpoint != nil {
-//			updatedRoutes = append(updatedRoutes, route)
-//			continue
-//		}
-//		err := r.Delete(ctx, s.GPRCRoutesLocation)
-//		if err != nil {
-//			return nil, s.Wool.Wrapf(err, "cannot delete route")
-//		}
-//	}
-//	var known []*configurations.GRPCRoute
-//	for _, route := range updatedRoutes {
-//		known = append(known, configurations.UnwrapGRPCRoute(route))
-//	}
-//	s.Wool.Debug("known gRPC routes", wool.SliceCountField(known))
-//
-//	return configurations.DetectNewGRPCRoutesFromEndpoints(ctx, s.DependencyEndpoints, known), nil
-//
-//}
-
 func (s *Builder) UpdateAvailableRoutes(ctx context.Context) error {
 	defer s.Wool.Catch()
 
 	newRestRoutes, err := s.UnknownRestRoutes(ctx)
 	s.Wool.Debug("unknown REST groups", wool.SliceCountField(newRestRoutes))
-	//
-	//newGRPCRoutes, err := s.UnknownGRPCRoutes(ctx)
-	//s.Wool.Debug("unknown gRPC routes", wool.SliceCountField(newGRPCRoutes))
 
 	s.syncForREST = []*ImportRoute{}
 	for _, group := range newRestRoutes {
@@ -211,12 +163,6 @@ func (s *Builder) UpdateAvailableRoutes(ctx context.Context) error {
 			s.syncForREST = append(s.syncForREST, imp)
 		}
 	}
-	//
-	//s.syncGRPC = []*ImportGRPC{}
-	//for _, route := range newGRPCRoutes {
-	//	imp := &ImportGRPC{GRPCRoute: route}
-	//	s.syncGRPC = append(s.syncGRPC, imp)
-	//}
 
 	if len(s.syncForREST) == 0 {
 		return nil
@@ -242,25 +188,13 @@ func hiddenRest(imp *ImportRoute) string {
 	return fmt.Sprintf("hidden-rest-%s", imp.Unique())
 }
 
-func exposeGRPCWithAuth(imp *ImportGRPC) string {
-	return fmt.Sprintf("expose-grpc-with-auth-%s", imp.Unique())
-}
-
-func exposeGRPCWithoutAuth(imp *ImportGRPC) string {
-	return fmt.Sprintf("expose-grpc-without-auth-%s", imp.Unique())
-}
-
-func hiddenGRPC(imp *ImportGRPC) string {
-	return fmt.Sprintf("hidden-grpc-%s", imp.Unique())
-}
-
 func (s *Builder) syncQuestions() *communicate.Sequence {
 	var questions []*agentv0.Question
 	if len(s.syncForREST) > 0 {
 		s.Wool.Info("Detected new REST routes! Let's do some import")
 	}
 	for _, imp := range s.syncForREST {
-		s.Builder.Focus("new route", wool.Field("route", imp.Unique()))
+		s.Wool.Debug("new route", wool.Field("route", imp.Unique()))
 		questions = append(questions,
 			communicate.NewChoice(&agentv0.Message{Name: imp.Unique(),
 				Message:     fmt.Sprintf("Want to expose REST route: %s %s for service <%s> from application <%s>", imp.Path, imp.Method, imp.service, imp.application),
@@ -270,18 +204,7 @@ func (s *Builder) syncQuestions() *communicate.Sequence {
 				&agentv0.Message{Name: hiddenRest(imp), Message: "No (internal only)"}),
 		)
 	}
-	//if len(s.syncGRPC) > 0 {
-	//	s.Wool.Info("Detected new gRPC routes! Let's do some import")
-	//}
-	//for _, imp := range s.syncGRPC {
-	//	questions = append(questions,
-	//		communicate.NewChoice(&agentv0.Message{Name: imp.Unique(),
-	//			Message: fmt.Sprintf("Want to expose gRPC route: %s for service <%s> from application <%s>", imp.Name, imp.Service, imp.Application)},
-	//			&agentv0.Message{Name: exposeGRPCWithAuth(imp), Message: "Yes (authenticated)"},
-	//			&agentv0.Message{Name: exposeGRPCWithoutAuth(imp), Message: "Yes (non authenticated)"},
-	//			&agentv0.Message{Name: hiddenGRPC(imp), Message: "No (internal only)"}),
-	//	)
-	//}
+
 	return communicate.NewSequence(questions...)
 }
 
@@ -306,15 +229,6 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 	if err != nil {
 		return s.Builder.SyncError(err)
 	}
-	//
-	//grpcLoader, err := configurations.NewExtendedGRPCRouteLoader[Extension](ctx, s.GPRCRoutesLocation)
-	//if err != nil {
-	//	return s.Builder.SyncError(err)
-	//}
-	//err = grpcLoader.Load(ctx)
-	//if err != nil {
-	//	return s.Builder.SyncError(err)
-	//}
 
 	for _, imp := range s.syncForREST {
 		expose, err := session.Choice(imp.Unique())
@@ -337,48 +251,17 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 		}
 		group.Add(route)
 	}
-
-	//for _, imp := range s.syncGRPC {
-	//	expose, err := session.Choice(imp.Unique())
-	//	if err != nil {
-	//		return s.Builder.SyncError(err)
-	//	}
-	//	route := &GRPCRoute{GRPCRoute: *imp.GRPCRoute}
-	//	if expose.Option == hiddenGRPC(imp) {
-	//		continue
-	//	}
-	//	s.Wool.Debug("exposing", wool.Field("key", expose.Option))
-	//	route.Extension.Exposed = true
-	//	if expose.Option == exposeGRPCWithAuth(imp) {
-	//		route.Extension.Protected = true
-	//	}
-	//	grpcLoader.Add(route)
-	//}
-
 	err = restRouteLoader.Save(ctx)
 	if err != nil {
 		return s.Builder.SyncError(err)
 	}
-	//
-	//err = grpcLoader.Save(ctx)
-	//if err != nil {
-	//	return s.Builder.SyncError(err)
-	//}
 
 	// Get all the routes
 	err = s.LoadRestRoutes(ctx)
 	if err != nil {
 		return s.Builder.SyncError(err)
 	}
-	//
-	//err = s.LoadGRPCRoutes(ctx)
-	//if err != nil {
-	//	return s.Builder.SyncError(err)
-	//}
 
-	if err != nil {
-		return s.Builder.SyncError(err)
-	}
 	return s.Builder.SyncResponse()
 }
 
@@ -415,13 +298,19 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot build image")
 	}
-	return &builderv0.BuildResponse{}, nil
+	return s.Builder.BuildResponse()
 }
 
 func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) (*builderv0.DeploymentResponse, error) {
 	defer s.Wool.Catch()
 
-	conf, err := s.createConfig(ctx, req.NetworkMappings, false)
+	var k *builderv0.KubernetesDeployment
+	var err error
+	if k, err = s.Builder.KubernetesDeploymentRequest(ctx, req); err != nil {
+		return s.Builder.DeployError(err)
+	}
+
+	conf, err := s.createConfig(ctx, req.DependenciesNetworkMappings, basev0.NetworkScope_Container)
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot write config")
 	}
@@ -429,8 +318,7 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 	params := services.DeploymentParameters{
 		Parameters: string(conf)}
 
-	panic("TODO: SEE REDIS")
-	err = s.Builder.GenericServiceDeploy(ctx, req, deploymentFS, params)
+	err = s.Builder.KustomizeDeploy(ctx, req.Environment, k, deploymentFS, params)
 	if err != nil {
 		return s.Builder.DeployError(err)
 	}
@@ -465,7 +353,6 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 	if err != nil {
 		return s.Builder.CreateError(err)
 	}
-	s.Configuration.ProviderDependencies = []string{"auth0"}
 
 	err = s.CreateEndpoint(ctx)
 	if err != nil {
@@ -482,19 +369,15 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 
 func (s *Service) CreateEndpoint(ctx context.Context) error {
 	defer s.Wool.Catch()
-	endpoint := s.Configuration.BaseEndpoint(standards.REST)
+	endpoint := s.Base.Service.BaseEndpoint(standards.REST)
 	endpoint.Visibility = configurations.VisibilityPublic
-	var err error
-	if shared.FileExists(s.Local("swagger.json")) {
-		s.restEndpoint, err = configurations.NewRestAPIFromOpenAPI(ctx, endpoint, s.Local("swagger.json"))
-		if err != nil {
-			return s.Wool.Wrapf(err, "cannot  create rest endpoint")
-		}
-	} else {
-		s.restEndpoint, err = configurations.NewRestAPI(ctx, endpoint)
-		if err != nil {
-			return s.Wool.Wrapf(err, "cannot  create rest endpoint")
-		}
+	rest, err := configurations.LoadRestAPI(ctx, nil)
+	if err != nil {
+		return s.Wool.Wrapf(err, "cannot load HTTP api")
+	}
+	s.restEndpoint, err = configurations.NewAPI(ctx, endpoint, configurations.ToRestAPI(rest))
+	if err != nil {
+		return s.Wool.Wrapf(err, "cannot create openapi api")
 	}
 	s.Endpoints = []*basev0.Endpoint{s.restEndpoint}
 	return nil

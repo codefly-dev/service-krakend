@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/codefly-dev/core/builders"
 	"github.com/codefly-dev/core/configurations/headers"
-	"github.com/codefly-dev/core/configurations/standards"
 	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
 	"github.com/codefly-dev/core/templates"
 	"github.com/codefly-dev/core/wool"
@@ -49,22 +48,15 @@ type RestRoute = configurations.ExtendedRestRoute[Extension]
 // RestRouteGroup extends the concept of RestRouteGroup to add API Gateway concepts
 type RestRouteGroup = configurations.ExtendedRestRouteGroup[Extension]
 
-// GRPCRoute extends the concept of GRPCRoute to add API Gateway concepts
-type GRPCRoute = configurations.ExtendedGRPCRoute[Extension]
-
 type Service struct {
 	*services.Base
 
 	// Access
-	port int32
+	port uint16
 
 	restRoutesLocation string
 
-	//GPRCRoutesLocation string
-
 	RestRouteGroups []*RestRouteGroup
-
-	//GRPCRoutes []*GRPCRoute
 
 	validator *AuthValidator
 
@@ -77,7 +69,6 @@ type Service struct {
 
 func (s *Service) Setup() {
 	s.restRoutesLocation = s.Local("routing/rest")
-	//s.GPRCRoutesLocation = s.Local("routing/grpc")
 }
 
 func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInformationRequest) (*agentv0.AgentInformation, error) {
@@ -88,9 +79,6 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 	}
 
 	return &agentv0.AgentInformation{
-		RuntimeRequirements: []*agentv0.Runtime{
-			{Type: agentv0.Runtime_DOCKER},
-		},
 		Capabilities: []*agentv0.Capability{
 			{Type: agentv0.Capability_BUILDER},
 			{Type: agentv0.Capability_RUNTIME},
@@ -121,70 +109,30 @@ func (s *Service) LoadRestRoutes(ctx context.Context) error {
 	}
 	s.RestRouteGroups = loader.Groups()
 	s.Wool.Debug("known REST route groups", wool.SliceCountField(s.RestRouteGroups))
+	return nil
+}
+
+func (s *Service) CreateValidator(ctx context.Context, conf *basev0.Configuration) (*AuthValidator, error) {
+	// Extract the data
+	if !configurations.HasConfigurationInformation(ctx, conf, s.Settings.AuthProvider) {
+		return nil, nil
+	}
+	audience, err := configurations.GetConfigurationValue(ctx, conf, s.Settings.AuthProvider, "AUDIENCE")
 	if err != nil {
-		return s.Wool.Wrapf(err, "cannot load routing")
+		return nil, s.Wool.Wrapf(err, "cannot get audience")
 	}
-	return nil
-}
+	issuerBaseURL, err := configurations.GetConfigurationValue(ctx, conf, s.Settings.AuthProvider, "ISSUER_BASE_URL")
 
-// LoadGRPCRoutes from routing configuration folder
-//func (s *Service) LoadGRPCRoutes(ctx context.Context) error {
-//	loader, err := configurations.NewExtendedGRPCRouteLoader[Extension](ctx, s.GPRCRoutesLocation)
-//	if err != nil {
-//		return s.Wool.Wrapf(err, "cannot create route loader")
-//	}
-//	err = loader.Load(ctx)
-//	if err != nil {
-//		return s.Wool.Wrapf(err, "cannot load routes")
-//	}
-//	s.GRPCRoutes = loader.All()
-//	s.Wool.Debug("known gRPC route groups", wool.SliceCountField(s.GRPCRoutes))
-//	if err != nil {
-//		return s.Wool.Wrapf(err, "cannot load routing")
-//	}
-//	return nil
-//}
-
-func (s *Service) CreateValidator(ctx context.Context, infos []*basev0.ProviderInformation) (*AuthValidator, error) {
-	// validator
-	for _, prov := range s.Configuration.ProviderDependencies {
-		validator, err := configurations.FindProjectProvider(prov, infos)
-		if err != nil {
-			return nil, s.Wool.Wrapf(err, "cannot get validator")
-		}
-		return &AuthValidator{
-			Alg:             "RS256",
-			Audience:        []string{validator.Data["AUDIENCE"]},
-			JwkURL:          fmt.Sprintf("%s/.well-known/jwks.json", validator.Data["ISSUER_BASE_URL"]),
-			PropagateClaims: [][]string{{"sub", headers.UserAuthID}},
-			Cache:           true,
-		}, nil
+	if err != nil {
+		return nil, s.Wool.Wrapf(err, "cannot get issuer base url")
 	}
-	return nil, fmt.Errorf("unknown validator")
-}
-
-func (s *Service) LoadEndpoints(ctx context.Context) error {
-	defer s.Wool.Catch()
-	for _, endpoint := range s.Configuration.Endpoints {
-		endpoint.Application = s.Configuration.Application
-		endpoint.Service = s.Configuration.Name
-		if shared.FileExists(s.Local("swagger.json")) {
-			rest, err := configurations.NewRestAPIFromOpenAPI(ctx, &configurations.Endpoint{Name: standards.REST, API: standards.REST, Visibility: endpoint.Visibility}, s.Local("swagger.json"))
-			if err != nil {
-				return s.Wool.Wrapf(err, "cannot  create rest endpoint")
-			}
-			s.restEndpoint = rest
-			s.Endpoints = []*basev0.Endpoint{s.restEndpoint}
-		} else {
-			rest, err := configurations.NewRestAPI(ctx, &configurations.Endpoint{Name: standards.REST, API: standards.REST, Visibility: endpoint.Visibility})
-			if err != nil {
-				return s.Wool.Wrapf(err, "cannot  create rest endpoint")
-			}
-			s.restEndpoint = rest
-			s.Endpoints = []*basev0.Endpoint{s.restEndpoint}
-		}
-	}
-	return nil
+	return &AuthValidator{
+		Alg:             "RS256",
+		Audience:        []string{audience},
+		JwkURL:          fmt.Sprintf("%s/.well-known/jwks.json", issuerBaseURL),
+		PropagateClaims: [][]string{{"sub", headers.UserAuthID}},
+		Cache:           true,
+	}, nil
 }
 
 func main() {

@@ -32,7 +32,7 @@ if [ ! -f "$YAML_FILE" ]; then
     exit 1
 fi
 
-CURRENT_VERSION=$(yq eval '.version' "$YAML_FILE")
+CURRENT_VERSION=$(yq -r '.version' "$YAML_FILE")
 
 git push -f
 git push origin "v$CURRENT_VERSION" -f
