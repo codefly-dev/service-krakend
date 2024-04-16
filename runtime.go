@@ -7,7 +7,7 @@ import (
 	"github.com/codefly-dev/core/configurations"
 	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
 	runtimev0 "github.com/codefly-dev/core/generated/go/services/runtime/v0"
-	"github.com/codefly-dev/core/runners"
+	runners "github.com/codefly-dev/core/runners/base"
 	"github.com/codefly-dev/core/wool"
 )
 
@@ -15,7 +15,7 @@ type Runtime struct {
 	*Service
 
 	// internal
-	runner *runners.Docker
+	runner *runners.DockerEnvironment
 }
 
 func NewRuntime() *Runtime {
@@ -93,22 +93,22 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	}
 
 	if s.runner != nil {
-		err = s.runner.Stop()
+		err = s.runner.Stop(ctx)
 		if err != nil {
 			return s.Runtime.InitError(err)
 		}
 	}
 
-	runner, err := runners.NewDocker(ctx, image)
+	runner, err := runners.NewDockerHeadlessEnvironment(ctx, image, s.UniqueWithProject())
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
 
 	s.runner = runner
 
-	s.runner.WithMount(s.Local("config"), "/app/config")
+	s.runner.WithMount(s.Local("config"), "/codefly/config")
 
-	s.runner.WithPort(runners.DockerPortMapping{Container: s.port, Host: uint16(net.Port)})
+	s.runner.WithPortMapping(ctx, uint16(net.Port), s.port)
 
 	envs := []configurations.EnvironmentVariable{
 		configurations.Env("FC_ENABLE", 1),
@@ -132,20 +132,9 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	if s.runner.Running() {
-		return s.Runtime.StartResponse()
-	}
-
 	s.Runtime.LogStartRequest(req)
 
 	err := s.writeConfig(ctx, req.DependenciesNetworkMappings, s.Runtime.Scope)
-	if err != nil {
-		return s.Runtime.StartError(err)
-	}
-
-	runningContext := s.Wool.Inject(context.Background())
-
-	err = s.runner.Start(runningContext)
 	if err != nil {
 		return s.Runtime.StartError(err)
 	}
@@ -161,7 +150,7 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtim
 	defer s.Wool.Catch()
 
 	s.Wool.Debug("stopping service")
-	err := s.runner.Stop()
+	err := s.runner.Stop(ctx)
 	if err != nil {
 		return s.Runtime.StopError(err)
 	}
