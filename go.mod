@@ -3,7 +3,7 @@ module github.com/codefly-dev/service-krakend
 go 1.22.0
 
 require (
-	github.com/codefly-dev/core v0.1.86
+	github.com/codefly-dev/core v0.1.87
 	github.com/hashicorp/go-plugin v1.6.0
 	github.com/stretchr/testify v1.9.0
 	google.golang.org/grpc v1.63.2
