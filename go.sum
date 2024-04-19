@@ -20,8 +20,8 @@ github.com/cenkalti/backoff/v4 v4.2.1 h1:y4OZtCnogmCPw98Zjyt5a6+QwPLGkiQsYW5oUqy
 github.com/cenkalti/backoff/v4 v4.2.1/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
 github.com/cheggaaa/pb/v3 v3.1.5 h1:QuuUzeM2WsAqG2gMqtzaWithDJv0i+i6UlnwSCI4QLk=
 github.com/cheggaaa/pb/v3 v3.1.5/go.mod h1:CrxkeghYTXi1lQBEI7jSn+3svI3cuc19haAj6jM60XI=
-github.com/codefly-dev/core v0.1.87 h1:SHrURVkrsepdxv+SqKzu4Is+w+rjyIXMF+76ZKSyx4s=
-github.com/codefly-dev/core v0.1.87/go.mod h1:iP7WE9MZ+Z71slLH4hlLjQ9ZYNHkyNAqSJJX8ETc1UI=
+github.com/codefly-dev/core v0.1.88 h1:rhv8YgdKYeO+MJX9ODNmVa06wPGH1Oi7IlNcTqDr/7I=
+github.com/codefly-dev/core v0.1.88/go.mod h1:iP7WE9MZ+Z71slLH4hlLjQ9ZYNHkyNAqSJJX8ETc1UI=
 github.com/containerd/log v0.1.0 h1:TCJt7ioM2cr/tfR8GPbGf9/VRAX8D2B4PjzCpfX540I=
 github.com/containerd/log v0.1.0/go.mod h1:VRRf09a7mHDIRezVKTRCrOq78v577GXq3bSa3EhrzVo=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
