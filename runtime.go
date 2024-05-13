@@ -4,9 +4,9 @@ import (
 	"context"
 	"github.com/codefly-dev/core/agents/helpers/code"
 	"github.com/codefly-dev/core/agents/services"
-	"github.com/codefly-dev/core/configurations"
 	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
 	runtimev0 "github.com/codefly-dev/core/generated/go/services/runtime/v0"
+	configurations "github.com/codefly-dev/core/resources"
 	runners "github.com/codefly-dev/core/runners/base"
 	"github.com/codefly-dev/core/wool"
 )
@@ -30,7 +30,7 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 
 	err := s.Base.Load(ctx, req.Identity, s.Settings)
 	if err != nil {
-		return s.Base.Runtime.LoadError(err)
+		return s.Runtime.LoadError(err)
 	}
 
 	s.Setup()
@@ -39,12 +39,12 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 
 	err = s.LoadRestRoutes(ctx)
 	if err != nil {
-		return s.Base.Runtime.LoadError(err)
+		return s.Runtime.LoadError(err)
 	}
 
 	s.Endpoints, err = s.Base.Service.LoadEndpoints(ctx)
 	if err != nil {
-		return s.Base.Runtime.LoadError(err)
+		return s.Runtime.LoadError(err)
 	}
 
 	s.openapiDestination = s.Local("swagger.json")
@@ -61,7 +61,7 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 		}
 	}
 
-	return s.Base.Runtime.LoadResponse()
+	return s.Runtime.LoadResponse()
 }
 
 func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtimev0.InitResponse, error) {
@@ -82,7 +82,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		return s.Runtime.InitError(err)
 	}
 
-	s.LogForward("will run on: %s", net.Address)
+	s.Infof("will run on: %s", net.Address)
 
 	// for docker
 	s.port = 80
@@ -99,7 +99,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		}
 	}
 
-	runner, err := runners.NewDockerHeadlessEnvironment(ctx, image, s.UniqueWithProject())
+	runner, err := runners.NewDockerHeadlessEnvironment(ctx, image, s.UniqueWithWorkspace())
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
@@ -125,7 +125,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		return s.Runtime.InitError(err)
 	}
 
-	return s.Base.Runtime.InitResponse()
+	return s.Runtime.InitResponse()
 }
 
 func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runtimev0.StartResponse, error) {

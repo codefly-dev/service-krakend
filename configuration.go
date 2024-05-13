@@ -11,7 +11,7 @@ import (
 	"os"
 
 	"github.com/codefly-dev/core/agents/services"
-	"github.com/codefly-dev/core/configurations"
+	configurations "github.com/codefly-dev/core/resources"
 	"github.com/codefly-dev/core/shared"
 )
 

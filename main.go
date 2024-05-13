@@ -14,8 +14,8 @@ import (
 
 	"github.com/codefly-dev/core/agents"
 	"github.com/codefly-dev/core/agents/services"
-	"github.com/codefly-dev/core/configurations"
 	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
+	configurations "github.com/codefly-dev/core/resources"
 	"github.com/codefly-dev/core/shared"
 )
 
