@@ -10,7 +10,7 @@ import (
 	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
 	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
 	builderv0 "github.com/codefly-dev/core/generated/go/services/builder/v0"
-	configurations "github.com/codefly-dev/core/resources"
+	"github.com/codefly-dev/core/resources"
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/standards"
 	"github.com/codefly-dev/core/templates"
@@ -18,22 +18,22 @@ import (
 )
 
 type ImportRoute struct {
-	*configurations.RestRoute
-	service     string
-	application string
+	*resources.RestRoute
+	service string
+	module  string
 }
 
 type ImportGRPC struct {
-	*configurations.GRPCRoute
+	*resources.GRPCRoute
 }
 
 func (g *ImportGRPC) Unique() string {
-	return fmt.Sprintf("%s%s %s", g.Application, g.Service, g.Name)
+	return fmt.Sprintf("%s%s %s", g.Module, g.Service, g.Name)
 
 }
 
 func (imp *ImportRoute) Unique() string {
-	return fmt.Sprintf("%s%s %s", configurations.ServiceUnique(imp.application, imp.service), imp.RestRoute.Path, imp.RestRoute.Method)
+	return fmt.Sprintf("%s%s %s", resources.ServiceUnique(imp.module, imp.service), imp.RestRoute.Path, imp.RestRoute.Method)
 }
 
 type Builder struct {
@@ -61,23 +61,26 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 
 	s.Setup()
 
-	_, err = shared.CheckDirectoryOrCreate(ctx, s.restRoutesLocation)
-	if err != nil {
-		return s.Builder.LoadError(err)
-	}
+	if req.CreationMode != nil {
+		s.Wool.Info("in creation mode")
+		s.Builder.CreationMode = req.CreationMode
 
-	// communication on CreateResponse
-	err = s.Communication.Register(ctx, communicate.New[builderv0.CreateRequest](createCommunicate()))
-	if err != nil {
-		return s.Builder.LoadError(err)
-	}
+		_, err = shared.CheckDirectoryOrCreate(ctx, s.restRoutesLocation)
+		if err != nil {
+			return s.Builder.LoadError(err)
+		}
 
-	s.Builder.GettingStarted, err = templates.ApplyTemplateFrom(ctx, shared.Embed(factoryFS), "templates/factory/GETTING_STARTED.md", s.Information)
-	if err != nil {
-		return nil, err
-	}
+		s.Builder.GettingStarted, err = templates.ApplyTemplateFrom(ctx, shared.Embed(factoryFS), "templates/factory/GETTING_STARTED.md", s.Information)
+		if err != nil {
+			return nil, err
+		}
 
-	if req.AtCreate {
+		if req.CreationMode.Communicate {
+			err = s.Communication.Register(ctx, communicate.New[builderv0.CreateRequest](s.createCommunicate()))
+			if err != nil {
+				return s.Builder.LoadError(err)
+			}
+		}
 		return s.Builder.LoadResponse()
 	}
 
@@ -91,6 +94,10 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 		return s.Builder.LoadError(err)
 	}
 
+	if req.SyncMode != nil {
+		s.Builder.SyncMode = req.SyncMode
+	}
+
 	return s.Builder.LoadResponse()
 }
 
@@ -100,10 +107,13 @@ func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builde
 
 	s.DependencyEndpoints = req.DependenciesEndpoints
 
-	err := s.UpdateAvailableRoutes(ctx)
+	if s.Builder.SyncMode != nil {
+		s.Wool.Debug("in sync mode")
+		err := s.UpdateAvailableRoutesForSync(ctx)
 
-	if err != nil {
-		return s.Builder.InitError(err)
+		if err != nil {
+			return s.Builder.InitError(err)
+		}
 	}
 	//
 	//hash, err := requirements.Hash(ctx)
@@ -120,15 +130,15 @@ func (s *Builder) Update(ctx context.Context, req *builderv0.UpdateRequest) (*bu
 	return &builderv0.UpdateResponse{}, nil
 }
 
-func (s *Builder) UnknownRestRoutes(ctx context.Context) ([]*configurations.RestRouteGroup, error) {
+func (s *Builder) UnknownRestRoutes(ctx context.Context) ([]*resources.RestRouteGroup, error) {
 	defer s.Wool.Catch()
 
 	s.Wool.Debug("examining REST routes from dependency endpoints", wool.SliceCountField(s.DependencyEndpoints))
 	// supported routes should correspond to dependency endpoints
 	var updatedGroups []*RestRouteGroup
 	for _, group := range s.RestRouteGroups {
-		baseGroup := configurations.UnwrapRestRouteGroup(group)
-		matchingEndpoint := configurations.FindEndpointForRestRoute(ctx, s.DependencyEndpoints, baseGroup)
+		baseGroup := resources.UnwrapRestRouteGroup(group)
+		matchingEndpoint := resources.FindEndpointForRestRoute(ctx, s.DependencyEndpoints, baseGroup)
 		if matchingEndpoint != nil {
 			updatedGroups = append(updatedGroups, group)
 			continue
@@ -139,16 +149,16 @@ func (s *Builder) UnknownRestRoutes(ctx context.Context) ([]*configurations.Rest
 		}
 	}
 
-	var known []*configurations.RestRouteGroup
+	var known []*resources.RestRouteGroup
 	for _, group := range updatedGroups {
-		known = append(known, configurations.UnwrapRestRouteGroup(group))
+		known = append(known, resources.UnwrapRestRouteGroup(group))
 	}
 	s.Wool.Debug("known route groups", wool.SliceCountField(known))
 
-	return configurations.DetectNewRoutesFromEndpoints(ctx, s.DependencyEndpoints, known), nil
+	return resources.DetectNewRoutesFromEndpoints(ctx, s.DependencyEndpoints, known), nil
 }
 
-func (s *Builder) UpdateAvailableRoutes(ctx context.Context) error {
+func (s *Builder) UpdateAvailableRoutesForSync(ctx context.Context) error {
 	defer s.Wool.Catch()
 
 	newRestRoutes, err := s.UnknownRestRoutes(ctx)
@@ -158,8 +168,8 @@ func (s *Builder) UpdateAvailableRoutes(ctx context.Context) error {
 	for _, group := range newRestRoutes {
 		for _, route := range group.Routes {
 			// Create the extended route
-			imp := &ImportRoute{RestRoute: route, service: group.Service, application: group.Application}
-			s.Wool.Debug("application", wool.Field("application", exposeRestWithoutAuth(imp)))
+			imp := &ImportRoute{RestRoute: route, service: group.Service, module: group.Module}
+			s.Wool.Debug("module", wool.Field("module", exposeRestWithoutAuth(imp)))
 			s.syncForREST = append(s.syncForREST, imp)
 		}
 	}
@@ -197,8 +207,8 @@ func (s *Builder) syncQuestions() *communicate.Sequence {
 		s.Wool.Debug("new route", wool.Field("route", imp.Unique()))
 		questions = append(questions,
 			communicate.NewChoice(&agentv0.Message{Name: imp.Unique(),
-				Message:     fmt.Sprintf("Want to expose REST route: %s %s for service <%s> from application <%s>", imp.Path, imp.Method, imp.service, imp.application),
-				Description: fmt.Sprintf("Corresponding route on the API service will be /%s/%s%s", imp.application, imp.service, imp.Path)},
+				Message:     fmt.Sprintf("Want to expose REST route: %s %s for service <%s> from module <%s>", imp.Path, imp.Method, imp.service, imp.module),
+				Description: fmt.Sprintf("Corresponding route on the API service will be /%s/%s%s", imp.module, imp.service, imp.Path)},
 				&agentv0.Message{Name: exposeRestWithAuth(imp), Message: "Yes (authenticated)"},
 				&agentv0.Message{Name: exposeRestWithoutAuth(imp), Message: "Yes (non authenticated)"},
 				&agentv0.Message{Name: hiddenRest(imp), Message: "No (internal only)"}),
@@ -221,10 +231,11 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 	}
 	s.Wool.Debug("states", wool.NullableField("answers", session.GetState()))
 
-	restRouteLoader, err := configurations.NewExtendedRestRouteLoader[Extension](ctx, s.restRoutesLocation)
+	restRouteLoader, err := resources.NewExtendedRestRouteLoader[Extension](ctx, s.restRoutesLocation)
 	if err != nil {
 		return s.Builder.SyncError(err)
 	}
+
 	err = restRouteLoader.Load(ctx)
 	if err != nil {
 		return s.Builder.SyncError(err)
@@ -235,9 +246,9 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 		if err != nil {
 			return s.Builder.SyncError(err)
 		}
-		group := restRouteLoader.GroupFor(configurations.ServiceUnique(imp.application, imp.service), imp.Path)
+		group := restRouteLoader.GroupFor(resources.ServiceUnique(imp.module, imp.service), imp.Path)
 		if group == nil {
-			group = &RestRouteGroup{Application: imp.application, Service: imp.service, Path: imp.Path}
+			group = &RestRouteGroup{Module: imp.module, Service: imp.service, Path: imp.Path}
 			restRouteLoader.AddGroup(group)
 		}
 		route := RestRoute{RestRoute: *imp.RestRoute}
@@ -261,6 +272,8 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 	if err != nil {
 		return s.Builder.SyncError(err)
 	}
+
+	// Create the configuration
 
 	return s.Builder.SyncResponse()
 }
@@ -310,7 +323,7 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 		return s.Builder.DeployError(err)
 	}
 
-	conf, err := s.createConfig(ctx, req.DependenciesNetworkMappings, basev0.NetworkScope_Container)
+	conf, err := s.createConfig(ctx, req.DependenciesNetworkMappings, resources.NewContainerNetworkAccess())
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot write config")
 	}
@@ -328,28 +341,27 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 
 /* Creation */
 
-const Watch = "with-hot-reload"
+func (s *Builder) Options() []*agentv0.Question {
+	return nil
+}
 
-func createCommunicate() *communicate.Sequence {
-	return communicate.NewSequence(
-		communicate.NewConfirm(&agentv0.Message{Name: Watch, Message: "Hot-reload on route changes?", Description: "codefly can restart your service when route changes are detected after a sync 🔎"}, true),
-	)
+func (s *Builder) createCommunicate() *communicate.Sequence {
+	return communicate.NewSequence(s.Options()...)
 }
 
 func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*builderv0.CreateResponse, error) {
 	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
 
-	session, err := s.Communication.Done(ctx, communicate.Channel[builderv0.CreateRequest]())
-	if err != nil {
-		return s.Builder.CreateError(err)
+	if s.Builder.CreationMode.Communicate {
+		s.Wool.Debug("using communicate mode")
+		_, err := s.Communication.Done(ctx, communicate.Channel[builderv0.CreateRequest]())
+		if err != nil {
+			return s.Builder.CreateError(err)
+		}
 	}
 
-	s.Settings.Watch, err = session.Confirm(Watch)
-	if err != nil {
-		return s.Builder.CreateError(err)
-	}
-
-	err = s.Templates(ctx, s.Information, services.WithFactory(factoryFS))
+	err := s.Templates(ctx, s.Information, services.WithFactory(factoryFS))
 	if err != nil {
 		return s.Builder.CreateError(err)
 	}
@@ -370,12 +382,12 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 func (s *Service) CreateEndpoint(ctx context.Context) error {
 	defer s.Wool.Catch()
 	endpoint := s.Base.Service.BaseEndpoint(standards.REST)
-	endpoint.Visibility = configurations.VisibilityPublic
-	rest, err := configurations.LoadRestAPI(ctx, nil)
+	endpoint.Visibility = resources.VisibilityPublic
+	rest, err := resources.LoadRestAPI(ctx, nil)
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot load HTTP api")
 	}
-	s.restEndpoint, err = configurations.NewAPI(ctx, endpoint, configurations.ToRestAPI(rest))
+	s.restEndpoint, err = resources.NewAPI(ctx, endpoint, resources.ToRestAPI(rest))
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot create openapi api")
 	}

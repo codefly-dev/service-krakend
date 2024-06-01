@@ -5,8 +5,8 @@ import (
 	"embed"
 	"fmt"
 	"github.com/codefly-dev/core/builders"
-	"github.com/codefly-dev/core/configurations/headers"
 	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
+	"github.com/codefly-dev/core/standards/headers"
 	"github.com/codefly-dev/core/templates"
 	"github.com/codefly-dev/core/wool"
 	"google.golang.org/grpc/codes"
@@ -28,14 +28,10 @@ var requirements = builders.NewDependencies(agent.Name,
 )
 
 type Settings struct {
-	Debug bool `yaml:"debug"` // Developer only
-
-	Watch bool `yaml:"watch"`
-
-	AuthProvider string `yaml:"auth-provider"`
+	AuthProvider string `yaml:"auth-provider,omitempty"`
 }
 
-var image = &configurations.DockerImage{Name: "devopsfaith/krakend", Tag: "latest"}
+var image = &configurations.DockerImage{Name: "devopsfaith/krakend", Tag: "2.6"}
 
 type Extension struct {
 	Exposed   bool `yaml:"exposed"`

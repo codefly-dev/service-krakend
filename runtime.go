@@ -3,10 +3,9 @@ package main
 import (
 	"context"
 	"github.com/codefly-dev/core/agents/helpers/code"
-	"github.com/codefly-dev/core/agents/services"
 	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
 	runtimev0 "github.com/codefly-dev/core/generated/go/services/runtime/v0"
-	configurations "github.com/codefly-dev/core/resources"
+	"github.com/codefly-dev/core/resources"
 	runners "github.com/codefly-dev/core/runners/base"
 	"github.com/codefly-dev/core/wool"
 )
@@ -25,13 +24,20 @@ func NewRuntime() *Runtime {
 }
 
 func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtimev0.LoadResponse, error) {
-	defer s.Wool.Catch()
-	ctx = s.Wool.Inject(ctx)
 
 	err := s.Base.Load(ctx, req.Identity, s.Settings)
 	if err != nil {
-		return s.Runtime.LoadError(err)
+		return s.Runtime.LoadErrorf(err, "loading base")
 	}
+
+	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
+
+	if req.DisableCatch {
+		s.Wool.DisableCatch()
+	}
+
+	s.Runtime.SetEnvironment(req.Environment)
 
 	s.Setup()
 
@@ -47,19 +53,27 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 		return s.Runtime.LoadError(err)
 	}
 
-	s.openapiDestination = s.Local("swagger.json")
-
-	if s.Settings.Watch && s.Watcher == nil {
-		s.Wool.Debug("setting up code watcher")
-		// Add proto and swagger
-		dependencies := requirements.Clone()
-		dependencies.Localize(s.Location)
-		conf := services.NewWatchConfiguration(dependencies)
-		err = s.SetupWatcher(ctx, conf, s.EventHandler)
-		if err != nil {
-			s.Wool.Warn("error in watcher", wool.ErrField(err))
-		}
+	s.restEndpoint, err = resources.FindRestEndpoint(ctx, s.Endpoints)
+	if err != nil {
+		return s.Runtime.LoadErrorf(err, "finding REST endpoint")
 	}
+	if s.restEndpoint == nil {
+		return s.Runtime.LoadError(s.Wool.NewError("cannot find REST endpoint"))
+	}
+
+	s.openapiDestination = s.Local("openapi/api.swagger.json")
+
+	//if s.Settings.Watch && s.Watcher == nil {
+	//	s.Wool.Debug("setting up code watcher")
+	//	// Add proto and swagger
+	//	dependencies := requirements.Clone()
+	//	dependencies.Localize(s.Location)
+	//	conf := services.NewWatchConfiguration(dependencies)
+	//	err = s.SetupWatcher(ctx, conf, s.EventHandler)
+	//	if err != nil {
+	//		s.Wool.Warn("error in watcher", wool.ErrField(err))
+	//	}
+	//}
 
 	return s.Runtime.LoadResponse()
 }
@@ -68,18 +82,24 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	s.Wool.Debug("generating openapiDestination")
+	s.Wool.Debug("REST endpoint", wool.Field("summary", resources.MakeEndpointSummary(s.restEndpoint)))
+
+	s.Runtime.LogInitRequest(req)
+
+	s.Wool.Debug("generating openapi")
 
 	err := s.writeOpenAPI(ctx, req.DependenciesEndpoints)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
 
+	s.Wool.Debug("looking for network instance", wool.Field("endpoint", resources.MakeEndpointSummary(s.restEndpoint)))
+
 	s.NetworkMappings = req.ProposedNetworkMappings
 
-	net, err := s.Runtime.NetworkInstance(ctx, s.NetworkMappings, s.restEndpoint)
+	net, err := resources.FindNetworkInstanceInNetworkMappings(ctx, s.NetworkMappings, s.restEndpoint, resources.NewContainerNetworkAccess())
 	if err != nil {
-		return s.Runtime.InitError(err)
+		return s.Runtime.InitErrorf(err, "cannot find network instance: %v", resources.MakeManyNetworkMappingSummary(s.NetworkMappings))
 	}
 
 	s.Infof("will run on: %s", net.Address)
@@ -87,9 +107,11 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	// for docker
 	s.port = 80
 
-	s.validator, err = s.CreateValidator(ctx, req.Configuration)
-	if err != nil {
-		return s.Runtime.InitError(err)
+	if s.Settings.AuthProvider != "" {
+		s.validator, err = s.CreateValidator(ctx, req.Configuration)
+		if err != nil {
+			return s.Runtime.InitError(err)
+		}
 	}
 
 	if s.runner != nil {
@@ -106,24 +128,19 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 
 	s.runner = runner
 
-	s.runner.WithMount(s.Local("config"), "/codefly/config")
+	s.runner.WithMount(s.Local("routing"), "/codefly/routing")
 
 	s.runner.WithPortMapping(ctx, uint16(net.Port), s.port)
 
-	envs := []configurations.EnvironmentVariable{
-		configurations.Env("FC_ENABLE", 1),
-		configurations.Env("FC_SETTINGS", "/app/config/settings"),
-		configurations.Env("FC_CONFIG", "/app/config/out.json"),
+	envs := []*resources.EnvironmentVariable{
+		resources.Env("FC_ENABLE", 1),
+		resources.Env("FC_SETTINGS", "/codefly/routing/config/settings"),
+		resources.Env("FC_CONFIG", "/codefly/routing/config/out.json"),
 	}
 
 	s.runner.WithEnvironmentVariables(envs...)
 
-	s.runner.WithCommand("krakend", "run", "-d", "-c", "/app/config/krakend.tmpl")
-
-	err = s.runner.Init(ctx)
-	if err != nil {
-		return s.Runtime.InitError(err)
-	}
+	s.runner.WithCommand("krakend", "run", "-d", "-c", "/codefly/routing/config/krakend.tmpl")
 
 	return s.Runtime.InitResponse()
 }
@@ -134,7 +151,12 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 
 	s.Runtime.LogStartRequest(req)
 
-	err := s.writeConfig(ctx, req.DependenciesNetworkMappings, s.Runtime.Scope)
+	err := s.writeConfig(ctx, req.DependenciesNetworkMappings, resources.NewContainerNetworkAccess())
+	if err != nil {
+		return s.Runtime.StartError(err)
+	}
+
+	err = s.runner.Init(ctx)
 	if err != nil {
 		return s.Runtime.StartError(err)
 	}
@@ -150,12 +172,14 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtim
 	defer s.Wool.Catch()
 
 	s.Wool.Debug("stopping service")
-	err := s.runner.Stop(ctx)
-	if err != nil {
-		return s.Runtime.StopError(err)
+	if s.runner != nil {
+		err := s.runner.Stop(ctx)
+		if err != nil {
+			return s.Runtime.StopError(err)
+		}
 	}
 
-	err = s.Base.Stop()
+	err := s.Base.Stop()
 	if err != nil {
 		return s.Runtime.StopError(err)
 	}
@@ -163,8 +187,11 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtim
 }
 
 func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtimev0.TestResponse, error) {
-	//TODO implement me
-	panic("implement me")
+	return s.Runtime.TestResponse()
+}
+
+func (s *Runtime) Destroy(ctx context.Context, req *runtimev0.DestroyRequest) (*runtimev0.DestroyResponse, error) {
+	return s.Runtime.DestroyResponse()
 }
 
 func (s *Runtime) Communicate(ctx context.Context, req *agentv0.Engage) (*agentv0.InformationRequest, error) {

@@ -5,13 +5,13 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"github.com/codefly-dev/core/configurations/headers"
 	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
+	"github.com/codefly-dev/core/standards/headers"
 	"github.com/codefly-dev/core/wool"
 	"os"
 
 	"github.com/codefly-dev/core/agents/services"
-	configurations "github.com/codefly-dev/core/resources"
+	"github.com/codefly-dev/core/resources"
 	"github.com/codefly-dev/core/shared"
 )
 
@@ -85,16 +85,16 @@ func Cors(key string) CorsPolicy {
 	}
 }
 
-func gatewayRestTarget(r *configurations.RestRouteGroup) string {
-	return fmt.Sprintf("/%s/%s%s", r.Application, r.Service, r.Path)
+func gatewayRestTarget(r *resources.RestRouteGroup) string {
+	return fmt.Sprintf("/%s/%s%s", r.Module, r.Service, r.Path)
 }
 
-func (s *Service) writeConfig(ctx context.Context, nms []*basev0.NetworkMapping, scope basev0.NetworkScope) error {
-	conf, err := s.createConfig(ctx, nms, scope)
+func (s *Service) writeConfig(ctx context.Context, nms []*basev0.NetworkMapping, networkAccess *basev0.NetworkAccess) error {
+	conf, err := s.createConfig(ctx, nms, networkAccess)
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot create config")
 	}
-	target := s.Local("config/settings/routing.json")
+	target := s.Local("routing/config/settings/routing.json")
 	err = os.WriteFile(target, conf, 0o644)
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot write settings to %s", target)
@@ -102,9 +102,9 @@ func (s *Service) writeConfig(ctx context.Context, nms []*basev0.NetworkMapping,
 	return nil
 }
 
-func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*basev0.NetworkMapping, scope basev0.NetworkScope) ([]byte, error) {
+func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*basev0.NetworkMapping, networkAccess *basev0.NetworkAccess) ([]byte, error) {
 	// Write the main config
-	err := shared.Embed(config).Copy("templates/krakend.config", s.Local("config/krakend.tmpl"))
+	err := shared.Embed(config).Copy("templates/krakend.config", s.Local("routing/config/krakend.tmpl"))
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot copy config")
 	}
@@ -114,8 +114,8 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 	settings.ExtraConfig[CorsPolicyKey] = Cors(CorsPolicyKey)
 
 	for _, group := range s.RestRouteGroups {
-		baseGroup := configurations.UnwrapRestRouteGroup(group)
-		nm, err := services.NetworkInstanceForRestRouteGroup(ctx, baseGroup, scope, otherNetworkMappings)
+		baseGroup := resources.UnwrapRestRouteGroup(group)
+		nm, err := services.NetworkInstanceForRestRouteGroup(ctx, otherNetworkMappings, baseGroup, networkAccess)
 		if err != nil {
 			return nil, s.Wool.Wrapf(err, "cannot get network mapping for group")
 		}
@@ -124,7 +124,7 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 			if !route.Extension.Exposed {
 				continue
 			}
-			fwd := NewRESTForwarding(gatewayRestTarget(baseGroup), configurations.UnwrapRestRoute(route), nm.Address)
+			fwd := NewRESTForwarding(gatewayRestTarget(baseGroup), resources.UnwrapRestRoute(route), nm.Address)
 			if route.Extension.Protected {
 				fwd.InputHeaders = headers.UserHeaders()
 				ProtectRestRoute(&fwd, s.validator)
@@ -142,26 +142,31 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 
 func (s *Service) writeOpenAPI(ctx context.Context, endpoints []*basev0.Endpoint) error {
 	w := wool.Get(ctx).In("create open api")
-	gateway := configurations.EndpointFromProto(s.restEndpoint)
-	combinator, err := configurations.NewOpenAPICombinator(ctx, gateway, endpoints...)
+	if s.restEndpoint == nil {
+		return w.NewError("REST endpoint nil")
+	}
+	gateway := resources.EndpointFromProto(s.restEndpoint)
+	combinator, err := resources.NewOpenAPICombinator(ctx, gateway, endpoints...)
 	if err != nil {
 		return w.Wrapf(err, "cannot create combinator")
 	}
 	combinator.WithDestination(s.openapiDestination)
 	combinator.WithVersion(s.Base.Service.Version)
+	s.Wool.Focus("rest routes groups", wool.SliceCountField(s.RestRouteGroups))
 	for _, group := range s.RestRouteGroups {
-		baseGroup := configurations.UnwrapRestRouteGroup(group)
+		baseGroup := resources.UnwrapRestRouteGroup(group)
 		combinator.Only(baseGroup.ServiceUnique(), baseGroup.Path)
 	}
-	s.restEndpoint, err = combinator.Combine(ctx)
+	restAPI, err := combinator.Combine(ctx)
 	if err != nil {
 		return w.Wrapf(err, "cannot combine open api")
 	}
+	s.restEndpoint.ApiDetails = resources.ToRestAPI(restAPI)
 	s.Endpoints = []*basev0.Endpoint{s.restEndpoint}
 	return nil
 }
 
-func NewRESTForwarding(target string, route *configurations.RestRoute, host string) ForwardedRESTRoute {
+func NewRESTForwarding(target string, route *resources.RestRoute, host string) ForwardedRESTRoute {
 	return ForwardedRESTRoute{
 		Endpoint: target,
 		Method:   string(route.Method),
@@ -173,7 +178,7 @@ func NewRESTForwarding(target string, route *configurations.RestRoute, host stri
 	}
 }
 
-func NewGRPCForwarding(target string, base *configurations.GRPCRoute, hosts []string) ForwardedGRPCRoute {
+func NewGRPCForwarding(target string, base *resources.GRPCRoute, hosts []string) ForwardedGRPCRoute {
 	return ForwardedGRPCRoute{
 		Endpoint: target,
 		Backend: Backend{
