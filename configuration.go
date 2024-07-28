@@ -5,8 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
-	"github.com/codefly-dev/core/standards/headers"
+	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	"github.com/codefly-dev/core/wool"
 	"os"
 
@@ -19,17 +18,17 @@ import (
 // JSON -- yaml not working
 type KrakendSettings struct {
 	Port      uint16               `json:"port"`
-	RESTGroup []ForwardedRESTRoute `json:"rest_group"`
+	RESTGroup []ForwardedRESTRoute `json:"rest_group,omitempty"`
 
-	ExtraConfig map[string]any `json:"extra_config"`
+	ExtraConfig map[string]any `json:"extra_config,omitempty"`
 }
 
 type ForwardedRESTRoute struct {
 	Endpoint     string         `json:"endpoint"`
 	Method       string         `json:"method"`
-	InputHeaders []string       `json:"input_headers"`
+	InputHeaders []string       `json:"input_headers,omitempty"`
 	Backend      Backend        `json:"backend"`
-	ExtraConfig  map[string]any `json:"extra_config"`
+	ExtraConfig  map[string]any `json:"extra_config,omitempty"`
 }
 
 type ForwardedGRPCRoute struct {
@@ -42,14 +41,15 @@ type Backend struct {
 	Hosts      []string `json:"hosts"`
 }
 
-type InputHeaders struct {
-	Headers []string `json:"headers"`
+type AuthValidator struct {
+	Key           string
+	Configuration any
 }
 
-// AuthValidatorKey for auth
-const AuthValidatorKey = "auth/validator"
+// JWTAuthValidatorKey for auth
+const JWTAuthValidatorKey = "auth/validator"
 
-type AuthValidator struct {
+type JWTAuthValidator struct {
 	Alg             string     `json:"alg,omitempty"`
 	Audience        []string   `json:"audience,omitempty"`
 	JwkURL          string     `json:"jwk_url,omitempty"`
@@ -58,8 +58,33 @@ type AuthValidator struct {
 	PropagateClaims [][]string `json:"propagate_claims,omitempty"`
 }
 
-func ProtectRestRoute(config *ForwardedRESTRoute, validator *AuthValidator) {
-	config.ExtraConfig[AuthValidatorKey] = *validator
+type ModifierMartian struct {
+	HeaderCopy HeaderCopy `json:"header.Copy"`
+}
+
+type HeaderCopy struct {
+	Scope    []string `json:"scope"`
+	From     string   `json:"from"`
+	To       string   `json:"to"`
+	Modifier any      `json:"modifier,omitempty"`
+}
+
+type RegexModifier struct {
+	Scope       []string `json:"scope"`
+	Expression  string   `json:"expression"`
+	Replacement string   `json:"replacement"`
+}
+
+const ModifierMartianKey = "modifier/martian"
+
+func ProtectRestRoute(config *ForwardedRESTRoute, validators []*AuthValidator) error {
+	if config.ExtraConfig == nil {
+		config.ExtraConfig = make(map[string]any)
+	}
+	for _, validator := range validators {
+		config.ExtraConfig[validator.Key] = validator.Configuration
+	}
+	return nil
 }
 
 type CorsPolicy struct {
@@ -75,7 +100,7 @@ const CorsPolicyKey = "security/cors"
 
 func Cors(key string) CorsPolicy {
 	allowedHeaders := []string{"Content-Type", "Origin", "Authorization", "Accept"}
-	allowedHeaders = append(allowedHeaders, headers.UserHeaders()...)
+	allowedHeaders = append(allowedHeaders, wool.Headers()...)
 	return CorsPolicy{
 		AllowOrigins:  []string{"*"},
 		AllowMethods:  []string{"GET", "POST", "PUT", "DELETE"},
@@ -115,10 +140,12 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 
 	for _, group := range s.RestRouteGroups {
 		baseGroup := resources.UnwrapRestRouteGroup(group)
+
 		nm, err := services.NetworkInstanceForRestRouteGroup(ctx, otherNetworkMappings, baseGroup, networkAccess)
 		if err != nil {
 			return nil, s.Wool.Wrapf(err, "cannot get network mapping for group")
 		}
+
 		s.Wool.Debug("exposing routes", wool.Field("group", baseGroup.ServiceUnique()), wool.Field("routes", group.Routes))
 		for _, route := range group.Routes {
 			if !route.Extension.Exposed {
@@ -126,14 +153,18 @@ func (s *Service) createConfig(ctx context.Context, otherNetworkMappings []*base
 			}
 			fwd := NewRESTForwarding(gatewayRestTarget(baseGroup), resources.UnwrapRestRoute(route), nm.Address)
 			if route.Extension.Protected {
-				fwd.InputHeaders = headers.UserHeaders()
-				ProtectRestRoute(&fwd, s.validator)
+				// fwd.InputHeaders = wool.Headers()
+
+				err = ProtectRestRoute(&fwd, s.validators)
+				if err != nil {
+					return nil, s.Wool.Wrapf(err, "cannot create protected route without validator")
+				}
 			}
 			settings.RESTGroup = append(settings.RESTGroup, fwd)
 		}
 	}
 	var content []byte
-	content, err = json.MarshalIndent(settings, "", "  ")
+	content, err = json.Marshal(settings)
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot marshal settings")
 	}
@@ -146,30 +177,44 @@ func (s *Service) writeOpenAPI(ctx context.Context, endpoints []*basev0.Endpoint
 		return w.NewError("REST endpoint nil")
 	}
 	gateway := resources.EndpointFromProto(s.restEndpoint)
+
 	combinator, err := resources.NewOpenAPICombinator(ctx, gateway, endpoints...)
 	if err != nil {
 		return w.Wrapf(err, "cannot create combinator")
 	}
 	combinator.WithDestination(s.openapiDestination)
 	combinator.WithVersion(s.Base.Service.Version)
-	s.Wool.Focus("rest routes groups", wool.SliceCountField(s.RestRouteGroups))
+
+	s.Wool.Debug("rest routes groups", wool.SliceCountField(s.RestRouteGroups))
+
 	for _, group := range s.RestRouteGroups {
-		baseGroup := resources.UnwrapRestRouteGroup(group)
-		combinator.Only(baseGroup.ServiceUnique(), baseGroup.Path)
+		for _, route := range group.Routes {
+			if !route.Extension.Exposed {
+				continue
+			}
+			baseGroup := resources.UnwrapRestRouteGroup(group)
+			s.Wool.Focus("adding route", wool.Field("group", baseGroup.ServiceUnique()), wool.Field("route", route.Path))
+			combinator.Only(baseGroup.ServiceUnique(), baseGroup.Path, string(route.Method))
+		}
 	}
 	restAPI, err := combinator.Combine(ctx)
+
 	if err != nil {
 		return w.Wrapf(err, "cannot combine open api")
 	}
+
 	s.restEndpoint.ApiDetails = resources.ToRestAPI(restAPI)
+
 	s.Endpoints = []*basev0.Endpoint{s.restEndpoint}
+
 	return nil
 }
 
 func NewRESTForwarding(target string, route *resources.RestRoute, host string) ForwardedRESTRoute {
 	return ForwardedRESTRoute{
-		Endpoint: target,
-		Method:   string(route.Method),
+		Endpoint:     target,
+		Method:       string(route.Method),
+		InputHeaders: wool.Headers(),
 		Backend: Backend{
 			URLPattern: route.Path,
 			Hosts:      []string{host},

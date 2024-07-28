@@ -12,6 +12,7 @@ spec:
     metadata:
       labels:
         app: {{ .Service.Name.DNSCase }}
+        sha: {{ .Sha }}
     spec:
       containers:
         - name: {{ .Service.Name.DNSCase }}
@@ -24,4 +25,4 @@ spec:
       volumes:
         - name: settings
           configMap:
-            name: settings-configmap
+            name: "cm-{{.Service.Name.DNSCase}}-settings-routines"

@@ -7,9 +7,9 @@ import (
 	"github.com/codefly-dev/core/agents/communicate"
 	dockerhelpers "github.com/codefly-dev/core/agents/helpers/docker"
 	"github.com/codefly-dev/core/agents/services"
-	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
-	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
-	builderv0 "github.com/codefly-dev/core/generated/go/services/builder/v0"
+	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
+	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
+	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
 	"github.com/codefly-dev/core/resources"
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/standards"
@@ -229,6 +229,7 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 	if session == nil {
 		return s.Builder.SyncResponse()
 	}
+
 	s.Wool.Debug("states", wool.NullableField("answers", session.GetState()))
 
 	restRouteLoader, err := resources.NewExtendedRestRouteLoader[Extension](ctx, s.restRoutesLocation)
@@ -253,12 +254,13 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 		}
 		route := RestRoute{RestRoute: *imp.RestRoute}
 		if expose.Option == hiddenRest(imp) {
-			continue
-		}
-		s.Wool.Debug("exposing", wool.Field("key", expose.Option))
-		route.Extension.Exposed = true
-		if expose.Option == exposeRestWithAuth(imp) {
-			route.Extension.Protected = true
+			route.Extension.Exposed = false
+		} else {
+			s.Wool.Debug("exposing", wool.Field("key", expose.Option))
+			route.Extension.Exposed = true
+			if expose.Option == exposeRestWithAuth(imp) {
+				route.Extension.Protected = true
+			}
 		}
 		group.Add(route)
 	}
@@ -289,37 +291,96 @@ type DockerTemplating struct {
 
 func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*builderv0.BuildResponse, error) {
 	defer s.Wool.Catch()
-
-	s.Wool.Debug("building docker image")
-
-	docker := DockerTemplating{}
-	err := s.Templates(ctx, docker, services.WithBuilder(builderFS))
+	dockerRequest, err := s.Builder.DockerBuildRequest(ctx, req)
 	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot copy and apply template")
+		return nil, s.Wool.Wrapf(err, "can only do docker build request")
 	}
 
-	build, err := dockerhelpers.NewBuilder(dockerhelpers.BuilderConfiguration{
+	image := s.DockerImage(dockerRequest)
+
+	s.Wool.Debug("building docker runtimeImage", wool.Field("runtimeImage", image.FullName()))
+	if !dockerhelpers.IsValidDockerImageName(image.Name) {
+		return s.Builder.BuildError(fmt.Errorf("invalid docker runtimeImage name: %s", image.Name))
+	}
+
+	docker := DockerTemplating{}
+
+	err = shared.DeleteFile(ctx, s.Local("builder/Dockerfile"))
+	if err != nil {
+		return s.Builder.BuildError(err)
+	}
+
+	err = s.Templates(ctx, docker, services.WithBuilder(builderFS))
+	if err != nil {
+		return s.Builder.BuildError(err)
+	}
+
+	builder, err := dockerhelpers.NewBuilder(dockerhelpers.BuilderConfiguration{
 		Root:        s.Location,
-		Dockerfile:  "codefly/builder/Dockerfile",
+		Dockerfile:  "builder/Dockerfile",
 		Destination: image,
 		Output:      s.Wool,
 	})
 	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot create builder")
+		return s.Builder.BuildError(err)
 	}
-	_, err = build.Build(ctx)
+	_, err = builder.Build(ctx)
 	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot build image")
+		return s.Builder.BuildError(err)
 	}
+	s.Builder.WithDockerImages(image)
+
 	return s.Builder.BuildResponse()
+
+}
+
+type LoadBalancer struct {
+	Enabled bool
+	Host    string
+}
+
+type Parameters struct {
+	LoadBalancer
+	Configuration string
 }
 
 func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) (*builderv0.DeploymentResponse, error) {
 	defer s.Wool.Catch()
 
+	s.Builder.LogDeployRequest(req, s.Wool.Debug)
+
+	s.EnvironmentVariables.SetRunning()
+
 	var k *builderv0.KubernetesDeployment
 	var err error
 	if k, err = s.Builder.KubernetesDeploymentRequest(ctx, req); err != nil {
+		return s.Builder.DeployError(err)
+	}
+
+	err = s.EnvironmentVariables.AddEndpoints(ctx,
+		resources.LocalizeNetworkMapping(req.NetworkMappings, "localhost"),
+		resources.NewContainerNetworkAccess())
+	if err != nil {
+		return s.Builder.DeployError(err)
+	}
+
+	err = s.EnvironmentVariables.AddConfigurations(ctx, req.Configuration)
+	if err != nil {
+		return s.Builder.DeployError(err)
+	}
+
+	err = s.EnvironmentVariables.AddConfigurations(ctx, req.DependenciesConfigurations...)
+	if err != nil {
+		return s.Builder.DeployError(err)
+	}
+
+	cm, err := services.EnvsAsConfigMapData(s.EnvironmentVariables.Configurations()...)
+	if err != nil {
+		return s.Builder.DeployError(err)
+	}
+
+	secrets, err := services.EnvsAsSecretData(s.EnvironmentVariables.Secrets()...)
+	if err != nil {
 		return s.Builder.DeployError(err)
 	}
 
@@ -329,12 +390,15 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 	}
 
 	params := services.DeploymentParameters{
-		Parameters: string(conf)}
+		ConfigMap: cm,
+		SecretMap: secrets,
+		Parameters: Parameters{
+			LoadBalancer:  LoadBalancer{},
+			Configuration: string(conf),
+		},
+	}
 
 	err = s.Builder.KustomizeDeploy(ctx, req.Environment, k, deploymentFS, params)
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
 
 	return s.Builder.DeployResponse()
 }
@@ -381,7 +445,7 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 
 func (s *Service) CreateEndpoint(ctx context.Context) error {
 	defer s.Wool.Catch()
-	endpoint := s.Base.Service.BaseEndpoint(standards.REST)
+	endpoint := s.Base.BaseEndpoint(standards.REST)
 	endpoint.Visibility = resources.VisibilityPublic
 	rest, err := resources.LoadRestAPI(ctx, nil)
 	if err != nil {

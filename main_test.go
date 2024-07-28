@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	builderv0 "github.com/codefly-dev/core/generated/go/services/builder/v0"
+	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
 	"github.com/hashicorp/go-plugin"
 	"os"
 	"testing"
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
+	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 )
 
 func TestCreate(t *testing.T) {

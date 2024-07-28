@@ -1,10 +1,12 @@
 # Use an official KrakenD base image
-FROM devopsfaith/krakend
+# TODO: use template
+FROM devopsfaith/krakend:2.6
 
 # Set the working directory inside the container
 WORKDIR /app
 
-COPY config/krakend.tmpl /app/krakend.tmpl
+COPY routing/config/krakend.tmpl /app/krakend.tmpl
+
 # Change the permissions of the file to be readable by all users
 RUN chmod 644 /app/krakend.tmpl
 

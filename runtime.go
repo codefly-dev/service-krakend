@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"github.com/codefly-dev/core/agents/helpers/code"
-	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
-	runtimev0 "github.com/codefly-dev/core/generated/go/services/runtime/v0"
+	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
+	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
 	"github.com/codefly-dev/core/resources"
 	runners "github.com/codefly-dev/core/runners/base"
 	"github.com/codefly-dev/core/wool"
@@ -86,9 +86,15 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 
 	s.Runtime.LogInitRequest(req)
 
+	validators, err := s.CreateValidators(ctx, req.Configuration)
+	if err != nil {
+		return s.Runtime.InitError(err)
+	}
+	s.validators = validators
+
 	s.Wool.Debug("generating openapi")
 
-	err := s.writeOpenAPI(ctx, req.DependenciesEndpoints)
+	err = s.writeOpenAPI(ctx, req.DependenciesEndpoints)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
@@ -107,13 +113,6 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	// for docker
 	s.port = 80
 
-	if s.Settings.AuthProvider != "" {
-		s.validator, err = s.CreateValidator(ctx, req.Configuration)
-		if err != nil {
-			return s.Runtime.InitError(err)
-		}
-	}
-
 	if s.runner != nil {
 		err = s.runner.Stop(ctx)
 		if err != nil {
@@ -121,7 +120,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		}
 	}
 
-	runner, err := runners.NewDockerHeadlessEnvironment(ctx, image, s.UniqueWithWorkspace())
+	runner, err := runners.NewDockerHeadlessEnvironment(ctx, runtimeImage, s.UniqueWithWorkspace())
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
@@ -129,16 +128,16 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	s.runner = runner
 
 	s.runner.WithMount(s.Local("routing"), "/codefly/routing")
-
 	s.runner.WithPortMapping(ctx, uint16(net.Port), s.port)
 
 	envs := []*resources.EnvironmentVariable{
 		resources.Env("FC_ENABLE", 1),
+		resources.Env("FC_OUT", "/codefly/routing/out.json"),
 		resources.Env("FC_SETTINGS", "/codefly/routing/config/settings"),
 		resources.Env("FC_CONFIG", "/codefly/routing/config/out.json"),
 	}
 
-	s.runner.WithEnvironmentVariables(envs...)
+	s.runner.WithEnvironmentVariables(ctx, envs...)
 
 	s.runner.WithCommand("krakend", "run", "-d", "-c", "/codefly/routing/config/krakend.tmpl")
 
@@ -156,7 +155,11 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 		return s.Runtime.StartError(err)
 	}
 
-	err = s.runner.Init(ctx)
+	runContext := context.Background()
+	runContext = s.Wool.Inject(runContext)
+
+	err = s.runner.Init(runContext)
+
 	if err != nil {
 		return s.Runtime.StartError(err)
 	}
@@ -174,6 +177,11 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtim
 	s.Wool.Debug("stopping service")
 	if s.runner != nil {
 		err := s.runner.Stop(ctx)
+		if err != nil {
+			return s.Runtime.StopError(err)
+		}
+
+		err = s.runner.Shutdown(ctx)
 		if err != nil {
 			return s.Runtime.StopError(err)
 		}

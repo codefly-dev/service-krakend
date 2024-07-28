@@ -5,13 +5,9 @@ metadata:
   namespace: "{{ .Namespace }}"
 spec:
   selector:
-    app: {{ .Service.Unique.DNSCase}}
+    app: {{ .Service.Name.DNSCase}}
   ports:
     - protocol: TCP
       name: http-port
       port: 8080
       targetPort: 8080
-    - protocol: TCP
-      name: grpc-port
-      port: 9090
-      targetPort: 9090

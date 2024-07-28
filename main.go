@@ -5,8 +5,9 @@ import (
 	"embed"
 	"fmt"
 	"github.com/codefly-dev/core/builders"
-	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
-	"github.com/codefly-dev/core/standards/headers"
+	"github.com/codefly-dev/core/configurations"
+	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
+	"github.com/codefly-dev/core/resources"
 	"github.com/codefly-dev/core/templates"
 	"github.com/codefly-dev/core/wool"
 	"google.golang.org/grpc/codes"
@@ -14,13 +15,12 @@ import (
 
 	"github.com/codefly-dev/core/agents"
 	"github.com/codefly-dev/core/agents/services"
-	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
-	configurations "github.com/codefly-dev/core/resources"
+	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
 	"github.com/codefly-dev/core/shared"
 )
 
 // Agent version
-var agent = shared.Must(configurations.LoadFromFs[configurations.Agent](shared.Embed(info)))
+var agent = shared.Must(resources.LoadFromFs[resources.Agent](shared.Embed(info)))
 
 var requirements = builders.NewDependencies(agent.Name,
 	builders.NewDependency("service.codefly.yaml"),
@@ -28,10 +28,9 @@ var requirements = builders.NewDependencies(agent.Name,
 )
 
 type Settings struct {
-	AuthProvider string `yaml:"auth-provider,omitempty"`
 }
 
-var image = &configurations.DockerImage{Name: "devopsfaith/krakend", Tag: "2.6"}
+var runtimeImage = &resources.DockerImage{Name: "devopsfaith/krakend", Tag: "2.6"}
 
 type Extension struct {
 	Exposed   bool `yaml:"exposed"`
@@ -39,10 +38,10 @@ type Extension struct {
 }
 
 // RestRoute extends the concept of RestRoute to add API Gateway concepts
-type RestRoute = configurations.ExtendedRestRoute[Extension]
+type RestRoute = resources.ExtendedRestRoute[Extension]
 
 // RestRouteGroup extends the concept of RestRouteGroup to add API Gateway concepts
-type RestRouteGroup = configurations.ExtendedRestRouteGroup[Extension]
+type RestRouteGroup = resources.ExtendedRestRouteGroup[Extension]
 
 type Service struct {
 	*services.Base
@@ -54,7 +53,7 @@ type Service struct {
 
 	RestRouteGroups []*RestRouteGroup
 
-	validator *AuthValidator
+	validators []*AuthValidator
 
 	// Settings
 	*Settings
@@ -88,14 +87,14 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 
 func NewService() *Service {
 	return &Service{
-		Base:     services.NewServiceBase(context.Background(), agent.Of(configurations.ServiceAgent)),
+		Base:     services.NewServiceBase(context.Background(), agent.Of(resources.ServiceAgent)),
 		Settings: &Settings{},
 	}
 }
 
 // LoadRestRoutes from routing configuration folder
 func (s *Service) LoadRestRoutes(ctx context.Context) error {
-	loader, err := configurations.NewExtendedRestRouteLoader[Extension](ctx, s.restRoutesLocation)
+	loader, err := resources.NewExtendedRestRouteLoader[Extension](ctx, s.restRoutesLocation)
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot create route loader")
 	}
@@ -108,34 +107,53 @@ func (s *Service) LoadRestRoutes(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) CreateValidator(ctx context.Context, conf *basev0.Configuration) (*AuthValidator, error) {
-	// Extract the data
-	if !configurations.HasConfigurationInformation(ctx, conf, s.Settings.AuthProvider) {
+type ValidatorConfiguration struct {
+	Jwt *struct {
+		Audience string `yaml:"audience"`
+		URL      string `yaml:"url"`
+	} `yaml:"jwt"`
+}
+
+func (s *Service) CreateValidators(ctx context.Context, conf *basev0.Configuration) ([]*AuthValidator, error) {
+	s.Wool.Debug("conf", wool.Field("conf", resources.MakeConfigurationSummary(conf)))
+	auth, err := resources.GetConfigurationInformation(ctx, conf, "auth")
+	if err != nil {
+		return nil, s.Wool.Wrapf(err, "cannot get auth configuration")
+	}
+	if auth == nil {
 		return nil, nil
 	}
-	audience, err := configurations.GetConfigurationValue(ctx, conf, s.Settings.AuthProvider, "AUDIENCE")
+	s.Wool.Focus("AUTH", wool.Field("auth", string(auth.Data.Content)))
+	var auths []*AuthValidator
+	var vc ValidatorConfiguration
+	err = configurations.InformationUnmarshal(auth, &vc)
 	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot get audience")
+		return nil, s.Wool.Wrapf(err, "cannot unmarshal auth configuration")
 	}
-	issuerBaseURL, err := configurations.GetConfigurationValue(ctx, conf, s.Settings.AuthProvider, "ISSUER_BASE_URL")
+	if vc.Jwt != nil {
+		jwtConf := JWTAuthValidator{
+			Alg:             "RS256",
+			Audience:        []string{vc.Jwt.Audience},
+			JwkURL:          fmt.Sprintf("%s/.well-known/jwks.json", vc.Jwt.URL),
+			PropagateClaims: [][]string{{"sub", wool.Header(wool.UserAuthIDKey)}},
+			Cache:           true,
+		}
+		auths = append(auths,
+			&AuthValidator{
+				Key:           JWTAuthValidatorKey,
+				Configuration: jwtConf},
+		)
+	}
 
-	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot get issuer base url")
-	}
-	return &AuthValidator{
-		Alg:             "RS256",
-		Audience:        []string{audience},
-		JwkURL:          fmt.Sprintf("%s/.well-known/jwks.json", issuerBaseURL),
-		PropagateClaims: [][]string{{"sub", headers.UserAuthID}},
-		Cache:           true,
-	}, nil
+	return auths, nil
+
 }
 
 func main() {
 	agents.Register(
-		services.NewServiceAgent(agent.Of(configurations.ServiceAgent), NewService()),
-		services.NewBuilderAgent(agent.Of(configurations.RuntimeServiceAgent), NewBuilder()),
-		services.NewRuntimeAgent(agent.Of(configurations.BuilderServiceAgent), NewRuntime()))
+		services.NewServiceAgent(agent.Of(resources.ServiceAgent), NewService()),
+		services.NewBuilderAgent(agent.Of(resources.RuntimeServiceAgent), NewBuilder()),
+		services.NewRuntimeAgent(agent.Of(resources.BuilderServiceAgent), NewRuntime()))
 }
 
 //go:embed agent.codefly.yaml
