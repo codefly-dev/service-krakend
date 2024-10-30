@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"github.com/codefly-dev/core/agents/helpers/code"
+	v0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
 	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
 	"github.com/codefly-dev/core/resources"
@@ -39,7 +40,10 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 
 	s.Runtime.SetEnvironment(req.Environment)
 
-	s.Setup()
+	err = s.Setup(ctx)
+	if err != nil {
+		return s.Runtime.LoadError(err)
+	}
 
 	s.Wool.Debug("loading service")
 
@@ -82,19 +86,23 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	s.Wool.Debug("REST endpoint", wool.Field("summary", resources.MakeEndpointSummary(s.restEndpoint)))
-
 	s.Runtime.LogInitRequest(req)
 
-	validators, err := s.CreateValidators(ctx, req.Configuration)
-	if err != nil {
-		return s.Runtime.InitError(err)
-	}
-	s.validators = validators
+	s.Wool.Debug("REST endpoint", wool.Field("summary", resources.MakeEndpointSummary(s.restEndpoint)))
 
+	if s.requiresAuth {
+		confs := append([]*v0.Configuration{req.Configuration}, req.WorkspaceConfigurations...)
+		s.Wool.Focus("creating validators from configurations", wool.SliceCountField(confs))
+		validators, err := s.CreateValidators(ctx, confs...)
+		if err != nil {
+			return s.Runtime.InitErrorf(err, "cannot create validators")
+		}
+		s.validators = validators
+
+	}
 	s.Wool.Debug("generating openapi")
 
-	err = s.writeOpenAPI(ctx, req.DependenciesEndpoints)
+	err := s.writeOpenAPI(ctx, req.DependenciesEndpoints)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}

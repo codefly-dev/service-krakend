@@ -59,7 +59,10 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 
 	requirements.Localize(s.Location)
 
-	s.Setup()
+	err = s.Setup(ctx)
+	if err != nil {
+		return s.Builder.LoadError(err)
+	}
 
 	if req.CreationMode != nil {
 		s.Wool.Info("in creation mode")

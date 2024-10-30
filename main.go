@@ -53,7 +53,9 @@ type Service struct {
 
 	RestRouteGroups []*RestRouteGroup
 
-	validators []*AuthValidator
+	// Auth
+	requiresAuth bool
+	validators   []*AuthValidator
 
 	// Settings
 	*Settings
@@ -62,12 +64,18 @@ type Service struct {
 	openapiDestination string
 }
 
-func (s *Service) Setup() {
+func (s *Service) Setup(ctx context.Context) error {
 	s.restRoutesLocation = s.Local("routing/rest")
+	// Location of openapi
+	dir := s.Local("openapi")
+	_, err := shared.CheckDirectoryOrCreate(ctx, dir)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInformationRequest) (*agentv0.AgentInformation, error) {
-
 	rm, err := templates.ApplyTemplateFrom(ctx, shared.Embed(readme), "templates/agent/README.md", s.Information)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
@@ -104,6 +112,14 @@ func (s *Service) LoadRestRoutes(ctx context.Context) error {
 	}
 	s.RestRouteGroups = loader.Groups()
 	s.Wool.Debug("known REST route groups", wool.SliceCountField(s.RestRouteGroups))
+	// Check if we have protected routes
+	for _, group := range s.RestRouteGroups {
+		for _, route := range group.Routes {
+			if route.Extension.Protected {
+				s.requiresAuth = true
+			}
+		}
+	}
 	return nil
 }
 
@@ -114,37 +130,37 @@ type ValidatorConfiguration struct {
 	} `yaml:"jwt"`
 }
 
-func (s *Service) CreateValidators(ctx context.Context, conf *basev0.Configuration) ([]*AuthValidator, error) {
-	s.Wool.Debug("conf", wool.Field("conf", resources.MakeConfigurationSummary(conf)))
-	auth, err := resources.GetConfigurationInformation(ctx, conf, "auth")
-	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot get auth configuration")
-	}
-	if auth == nil {
-		return nil, nil
-	}
-	s.Wool.Focus("AUTH", wool.Field("auth", string(auth.Data.Content)))
+func (s *Service) CreateValidators(ctx context.Context, confs ...*basev0.Configuration) ([]*AuthValidator, error) {
 	var auths []*AuthValidator
-	var vc ValidatorConfiguration
-	err = configurations.InformationUnmarshal(auth, &vc)
-	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot unmarshal auth configuration")
-	}
-	if vc.Jwt != nil {
-		jwtConf := JWTAuthValidator{
-			Alg:             "RS256",
-			Audience:        []string{vc.Jwt.Audience},
-			JwkURL:          fmt.Sprintf("%s/.well-known/jwks.json", vc.Jwt.URL),
-			PropagateClaims: [][]string{{"sub", wool.Header(wool.UserAuthIDKey)}},
-			Cache:           true,
+	for _, conf := range confs {
+		auth, err := resources.GetConfigurationInformation(ctx, conf, "auth")
+		if err != nil || auth == nil {
+			continue
 		}
-		auths = append(auths,
-			&AuthValidator{
-				Key:           JWTAuthValidatorKey,
-				Configuration: jwtConf},
-		)
+		// Get the Type of the auth configuration
+		var vc ValidatorConfiguration
+		err = configurations.InformationUnmarshal(auth, &vc)
+		if err != nil {
+			return nil, s.Wool.Wrapf(err, "cannot unmarshal auth configuration")
+		}
+		if vc.Jwt != nil {
+			jwtConf := JWTAuthValidator{
+				Alg:             "RS256",
+				Audience:        []string{vc.Jwt.Audience},
+				JwkURL:          fmt.Sprintf("%s/.well-known/jwks.json", vc.Jwt.URL),
+				PropagateClaims: [][]string{{"sub", wool.Header(wool.UserAuthIDKey)}},
+				Cache:           true,
+			}
+			auths = append(auths,
+				&AuthValidator{
+					Key:           JWTAuthValidatorKey,
+					Configuration: jwtConf},
+			)
+		}
 	}
-
+	if len(auths) == 0 {
+		return nil, s.Wool.NewError("no auth configuration found")
+	}
 	return auths, nil
 
 }
